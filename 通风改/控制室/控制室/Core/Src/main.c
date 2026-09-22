@@ -19,7 +19,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
-#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -28,8 +27,6 @@
 #include "stdio.h"
 #include "string.h"
 #include "lora.h"
-#include "modbus.h"
-#include "DGUS.h"
 #include "dip_swich.h"
 /* USER CODE END Includes */
 
@@ -96,13 +93,10 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_TIM4_Init();
-  MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
-  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  /* 控制室只做网关：USART1=上位机，USART2=LoRa；不启动旧 USART3 变频器链路。 */
+  /* 控制室只做网关：USART1=上位机，USART2=LoRa。 */
   HAL_UART_Receive_IT(&huart2,&rx2_data,1);
   HAL_UART_Receive_IT(&huart1,&rx1_data,1);
 
@@ -190,29 +184,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
-  if(htim->Instance==TIM4)
-  {
-    ModbusType.Tx_1s++;     //  1s 计时——连续发送，用于测试
-    ModbusType.Tx_500ms++;     //  1s 计时——连续发送，用于测试
-
-    if (ModbusType.TxProcFinishFlag != 0U)
-    {
-      ModbusType.TxWaitTime++;
-    }
-    
-    if(ModbusType.RxTimRun!=0)      // 正在接受数据
-    {
-        ModbusType.RxWaitTime++;
-        if(ModbusType.RxWaitTime>=8)
-        {
-            ModbusType.RxRcFinishFlag=1;    // 超过 8ms 没有接受到数据，代表已经接受完毕
-            ModbusType.RxTimRun=0;      
-            ModbusType.RxWaitTime=0;
-        }
-    }
-      
-  }
-
   /* USER CODE END Callback 1 */
 }
 

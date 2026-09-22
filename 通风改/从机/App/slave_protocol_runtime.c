@@ -6,18 +6,15 @@
 
 #define FRAME_HEAD_1                 (0xAAU)
 #define FRAME_HEAD_2                 (0x55U)
-#define FRAME_VERSION                (0x03U)
+#define FRAME_VERSION                (0x04U)
 #define FRAME_MAX_PAYLOAD            (128U)
 #define FRAME_MIN_SIZE               (13U)
 #define FRAME_MAX_SIZE               (141U)
-#define FRAME_TEMP_PAYLOAD_SIZE      (112U)  /* 36 × (位号1B + 温度2B) + BME温度2B + 保留2B */
-#define FRAME_ENV_PAYLOAD_SIZE       (86U)
+#define FRAME_TELEMETRY_PAYLOAD_SIZE (18U)
 #define FRAME_ROLE_MASTER            (0x02U)
 #define FRAME_ROLE_SLAVE             (0x03U)
-#define FRAME_TYPE_READ_TEMP         (0x01U)
-#define FRAME_TYPE_TEMP_DATA         (0x02U)
-#define FRAME_TYPE_READ_ENV          (0x03U)
-#define FRAME_TYPE_ENV_DATA          (0x04U)
+#define FRAME_TYPE_READ_TELEMETRY    (0x01U)
+#define FRAME_TYPE_TELEMETRY         (0x02U)
 #define RX_RING_SIZE                 (256U)
 #define RX_RING_MASK                 (RX_RING_SIZE - 1U)
 #define TX_RETRY_COUNT               (3U)
@@ -49,26 +46,16 @@ static uint16_t g_frame_length;
 static uint16_t g_expected_length;
 static uint8_t g_local_group;
 static uint8_t g_application_mode;
-static uint8_t g_sample_requested;
-static uint8_t g_sample_in_progress;
-static uint16_t g_sample_flow_id;
-static uint8_t g_sample_request_type;
 static uint8_t g_tx_pending;
 static uint8_t g_tx_frame[FRAME_MAX_SIZE];
 static uint16_t g_tx_frame_length;
 static uint8_t g_tx_attempt_count;
 static uint32_t g_tx_not_before_tick;
 static uint32_t g_current_tick;
-static SlaveTelemetrySnapshot g_snapshot;
-static uint8_t g_snapshot_valid;
 static uint8_t g_last_temp_frame[FRAME_MAX_SIZE];
 static uint16_t g_last_temp_frame_length;
 static uint16_t g_last_temp_flow_id;
 static uint8_t g_last_temp_valid;
-static uint8_t g_last_env_frame[FRAME_MAX_SIZE];
-static uint16_t g_last_env_frame_length;
-static uint16_t g_last_env_flow_id;
-static uint8_t g_last_env_valid;
 
 SlaveRuntimeDiagnostics SlaveRuntimeDiag;
 
@@ -89,7 +76,6 @@ static uint16_t SlaveRuntime_Crc16(const uint8_t *data, uint16_t length)
     }
     return crc;
 }
-
 static uint8_t SlaveRuntime_DeadlineReached(uint32_t now_ms,
                                             uint32_t deadline)
 {
@@ -175,20 +161,15 @@ static void SlaveRuntime_WriteU32(uint8_t *destination, uint32_t value)
 
 static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
 {
-    uint8_t response_type;
-    uint8_t payload_length;
-    uint16_t index;
+    uint8_t payload_length = FRAME_TELEMETRY_PAYLOAD_SIZE;
     uint16_t crc;
 
-    response_type = (request_type == FRAME_TYPE_READ_TEMP) ?
-                    FRAME_TYPE_TEMP_DATA : FRAME_TYPE_ENV_DATA;
-    payload_length = (request_type == FRAME_TYPE_READ_TEMP) ?
-                     FRAME_TEMP_PAYLOAD_SIZE : FRAME_ENV_PAYLOAD_SIZE;
+    (void)request_type;
 
     g_tx_frame[0] = FRAME_HEAD_1;
     g_tx_frame[1] = FRAME_HEAD_2;
     g_tx_frame[2] = FRAME_VERSION;
-    g_tx_frame[3] = response_type;
+    g_tx_frame[3] = FRAME_TYPE_TELEMETRY;
     g_tx_frame[4] = FRAME_ROLE_SLAVE;
     g_tx_frame[5] = g_local_group;
     g_tx_frame[6] = FRAME_ROLE_MASTER;
@@ -197,54 +178,30 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_tx_frame[9] = (uint8_t)(flow_id >> 8U);
     g_tx_frame[10] = payload_length;
 
-    if (request_type == FRAME_TYPE_READ_TEMP)
-    {
-        for (index = 0U; index < SLAVE_TELEMETRY_POINT_COUNT; index++)
-        {
-            g_tx_frame[11U + index * 3U] = g_snapshot.node_position[index];
-            SlaveRuntime_WriteU16(&g_tx_frame[12U + index * 3U],
-                                  (uint16_t)g_snapshot.node_temperature_x10[index]);
-        }
-        SlaveRuntime_WriteU16(&g_tx_frame[119U],
-                              (uint16_t)g_snapshot.slave_bme_temperature_x10);
-        SlaveRuntime_WriteU16(&g_tx_frame[121U],
-                              (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
-    }
-    else
-    {
-        for (index = 0U; index < SLAVE_TELEMETRY_POINT_COUNT; index++)
-        {
-            SlaveRuntime_WriteU16(&g_tx_frame[11U + index * 2U],
-                                  g_snapshot.node_humidity_x10[index]);
-        }
-        SlaveRuntime_WriteU16(&g_tx_frame[83],
-                              g_snapshot.slave_bme_humidity_x10);
-        SlaveRuntime_WriteU16(&g_tx_frame[85], SLAVE_HUMIDITY_INVALID_X10);
-        SlaveRuntime_WriteU32(&g_tx_frame[87],
-                              g_snapshot.slave_bme_pressure_pa);
-        SlaveRuntime_WriteU32(&g_tx_frame[91], SLAVE_PRESSURE_INVALID_PA);
-        SlaveRuntime_WriteU16(&g_tx_frame[95], g_snapshot.rain_value);
-    }
+    /* Placeholder-only payload. Hardware values will be connected after the
+       v4 frame layout has been independently verified. */
+    memset(&g_tx_frame[11], 0, payload_length);
+    g_tx_frame[11] = 0U; /* validity flags: no real source connected */
+    SlaveRuntime_WriteU16(&g_tx_frame[12],
+                          (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
+    SlaveRuntime_WriteU16(&g_tx_frame[14], SLAVE_HUMIDITY_INVALID_X10);
+    SlaveRuntime_WriteU32(&g_tx_frame[16], SLAVE_PRESSURE_INVALID_PA);
+    SlaveRuntime_WriteU16(&g_tx_frame[20], 0xFFFFU);
+    SlaveRuntime_WriteU16(&g_tx_frame[22], 0xFFFFU);
+    g_tx_frame[24] = 0xFFU;
+    SlaveRuntime_WriteU16(&g_tx_frame[25],
+                          (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
+    SlaveRuntime_WriteU16(&g_tx_frame[27], SLAVE_HUMIDITY_INVALID_X10);
 
     g_tx_frame_length = (uint16_t)(FRAME_MIN_SIZE + payload_length);
     crc = SlaveRuntime_Crc16(&g_tx_frame[2], (uint16_t)(9U + payload_length));
     g_tx_frame[g_tx_frame_length - 2U] = (uint8_t)(crc & 0xFFU);
     g_tx_frame[g_tx_frame_length - 1U] = (uint8_t)(crc >> 8U);
 
-    if (request_type == FRAME_TYPE_READ_TEMP)
-    {
-        memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
-        g_last_temp_frame_length = g_tx_frame_length;
-        g_last_temp_flow_id = flow_id;
-        g_last_temp_valid = 1U;
-    }
-    else
-    {
-        memcpy(g_last_env_frame, g_tx_frame, g_tx_frame_length);
-        g_last_env_frame_length = g_tx_frame_length;
-        g_last_env_flow_id = flow_id;
-        g_last_env_valid = 1U;
-    }
+    memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
+    g_last_temp_frame_length = g_tx_frame_length;
+    g_last_temp_flow_id = flow_id;
+    g_last_temp_valid = 1U;
 
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = g_current_tick + SLAVE_REPLY_DELAY_MS;
@@ -256,21 +213,13 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
     const uint8_t *last_frame = NULL;
     uint16_t last_length = 0U;
 
-    if ((message->type == FRAME_TYPE_READ_TEMP) &&
+    if ((message->type == FRAME_TYPE_READ_TELEMETRY) &&
         (g_last_temp_valid != 0U) &&
         (message->flow_id == g_last_temp_flow_id))
     {
         last_frame = g_last_temp_frame;
         last_length = g_last_temp_frame_length;
     }
-    else if ((message->type == FRAME_TYPE_READ_ENV) &&
-             (g_last_env_valid != 0U) &&
-             (message->flow_id == g_last_env_flow_id))
-    {
-        last_frame = g_last_env_frame;
-        last_length = g_last_env_frame_length;
-    }
-
     if (last_frame == NULL)
     {
         return 0U;
@@ -290,8 +239,7 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
 
 static void SlaveRuntime_HandleMessage(const SlaveMessage *message)
 {
-    if (((message->type != FRAME_TYPE_READ_TEMP) &&
-         (message->type != FRAME_TYPE_READ_ENV)) ||
+    if ((message->type != FRAME_TYPE_READ_TELEMETRY) ||
         (message->source_role != FRAME_ROLE_MASTER) ||
         (message->destination_role != FRAME_ROLE_SLAVE) ||
         (message->source_group != g_local_group) ||
@@ -307,33 +255,12 @@ static void SlaveRuntime_HandleMessage(const SlaveMessage *message)
         return;
     }
 
-    /* 同一事务不会重复转换；两类事务分别保留最近的完整响应。 */
-    if (g_sample_in_progress != 0U)
-    {
-        if ((message->flow_id == g_sample_flow_id) &&
-            (message->type == g_sample_request_type))
-        {
-            SlaveRuntimeDiag.duplicate_request_count++;
-        }
-        return;
-    }
-
     if (g_tx_pending != 0U)
     {
         SlaveRuntimeDiag.ignored_message_count++;
         return;
     }
-    if ((message->payload[0] == 0U) && (g_snapshot_valid != 0U))
-    {
-        SlaveRuntime_BuildResponse(message->type, message->flow_id);
-    }
-    else
-    {
-        g_sample_flow_id = message->flow_id;
-        g_sample_request_type = message->type;
-        g_sample_requested = 1U;
-        g_sample_in_progress = 1U;
-    }
+    SlaveRuntime_BuildResponse(message->type, message->flow_id);
 }
 
 static void SlaveRuntime_PushByte(uint8_t byte)
@@ -400,23 +327,15 @@ void SlaveRuntime_Init(uint8_t local_group)
     (void)memset(&g_rx_ring, 0, sizeof(g_rx_ring));
     SlaveRuntime_ResetParser();
     g_local_group = local_group;
-    g_application_mode = ((local_group >= 1U) && (local_group <= 4U)) ? 1U : 0U;
-    g_sample_requested = 0U;
-    g_sample_in_progress = 0U;
-    g_sample_request_type = 0U;
+    g_application_mode = (local_group == 1U) ? 1U : 0U;
     g_tx_pending = 0U;
     g_tx_frame_length = 0U;
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = 0U;
     g_current_tick = 0U;
-    g_snapshot_valid = 0U;
     g_last_temp_frame_length = 0U;
     g_last_temp_flow_id = 0U;
     g_last_temp_valid = 0U;
-    g_last_env_frame_length = 0U;
-    g_last_env_flow_id = 0U;
-    g_last_env_valid = 0U;
-    (void)memset(&g_snapshot, 0, sizeof(g_snapshot));
     (void)memset(&SlaveRuntimeDiag, 0, sizeof(SlaveRuntimeDiag));
 }
 
@@ -476,43 +395,4 @@ void SlaveRuntime_Process(uint32_t now_ms)
             }
         }
     }
-}
-
-uint8_t SlaveRuntime_TakeSampleRequest(uint16_t *flow_id)
-{
-    if ((flow_id == NULL) || (g_sample_requested == 0U))
-    {
-        return 0U;
-    }
-    *flow_id = g_sample_flow_id;
-    g_sample_requested = 0U;
-    return 1U;
-}
-
-void SlaveRuntime_UpdateSnapshot(const SlaveTelemetrySnapshot *snapshot)
-{
-    if (snapshot == NULL)
-    {
-        return;
-    }
-    g_snapshot = *snapshot;
-    g_snapshot_valid = 1U;
-}
-
-void SlaveRuntime_CompleteSample(uint16_t flow_id,
-                                 const SlaveTelemetrySnapshot *snapshot)
-{
-    uint8_t request_type;
-
-    if ((snapshot == NULL) || (g_sample_in_progress == 0U) ||
-        (flow_id != g_sample_flow_id) || (g_tx_pending != 0U))
-    {
-        return;
-    }
-
-    request_type = g_sample_request_type;
-    SlaveRuntime_UpdateSnapshot(snapshot);
-    g_sample_in_progress = 0U;
-    g_sample_request_type = 0U;
-    SlaveRuntime_BuildResponse(request_type, flow_id);
 }

@@ -2,6 +2,8 @@
 
 当前可用的智能通风系统上位机统一放在此目录。
 
+当前版本使用 LoRa 应用协议 v4：固定单组、18 字节单遥测帧、四路风机占空比控制。传感器未接入阶段，无效占位值统一显示为 `--`，数据写入新表 `telemetry_v4`，不会改动旧表。
+
 ## 目录约定
 
 - `main.py`：唯一的上位机源码入口。
@@ -12,7 +14,7 @@
 
 ```powershell
 python .\main.py
-python .\tests\test_protocol.py
+python -m unittest discover -s .\tests
 ```
 
 打包时从本目录执行：

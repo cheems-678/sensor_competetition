@@ -1,0 +1,35 @@
+#ifndef MASTER_CONFIG_H
+#define MASTER_CONFIG_H
+
+#define MASTER_GROUP_MIN                         (1U)
+#define MASTER_GROUP_MAX                         (1U)
+
+/* 现场可调参数：首次联调后按实际轮询周期和空口延迟复核。 */
+#define MASTER_TEMP_CACHE_FRESH_MS               (5000UL)
+#define MASTER_ENV_CACHE_FRESH_MS                (5000UL)
+#define MASTER_BME_CACHE_FRESH_MS                (2000UL)
+#define MASTER_DHT11_CACHE_FRESH_MS              (2000UL)
+#define MASTER_SLAVE_RESPONSE_TIMEOUT_MS         (3000UL)
+
+/* 主机 PA5 DHT11 单机联调开关：1 直接回复主机数据，0 等待从机汇总。 */
+#define MASTER_DIRECT_DHT11_TELEMETRY             (1U)
+
+/* PB0 雨滴输入：低电平表示 LM393 已检测到雨滴。 */
+#define MASTER_RAIN_ASSERT_MS                   (200UL)
+
+#define MASTER_RAIN_CLEAR_MS                    (3000UL)
+#define MASTER_DEFAULT_TARGET_TEMP_X10           (260)
+#define MASTER_DEFAULT_TARGET_HUMIDITY_X10       (300U)
+#define MASTER_MIN_TARGET_TEMP_X10               (-550)
+#define MASTER_MAX_TARGET_TEMP_X10               (1250)
+
+#define MASTER_AUTO_STOP_HYSTERESIS_X10          (5)
+
+/* 安全停机和脏参数都限速重试，避免忙等待和Flash过度擦写。 */
+#define MASTER_SAFETY_STOP_RETRY_MS                (1000UL)
+#define MASTER_FLASH_DEBOUNCE_MS                    (3000UL)
+#define MASTER_FLASH_RETRY_MS                      (5000UL)
+
+#define MASTER_COMMAND_HISTORY_DEPTH             (4U)
+
+#endif /* MASTER_CONFIG_H */
