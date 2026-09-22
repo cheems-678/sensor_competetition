@@ -2,14 +2,15 @@
 
 #include "stm32f1xx_hal.h"
 
-#define FAN_PWM_PERIOD_TICKS (40U)
+/* APB1 timers run at 72 MHz in SystemClock_Config: 72 MHz / 2880 = 25 kHz. */
+#define FAN_PWM_PERIOD_TICKS (2880U)
 
 static uint8_t g_duty[4];
 
 static void FanPwm_InitTimer(TIM_TypeDef *timer)
 {
     timer->CR1 = TIM_CR1_ARPE;
-    timer->PSC = 71U;
+    timer->PSC = 0U;
     timer->ARR = FAN_PWM_PERIOD_TICKS - 1U;
 }
 
@@ -19,7 +20,7 @@ static uint32_t FanPwm_Compare(uint8_t duty_percent)
     {
         return FAN_PWM_PERIOD_TICKS;
     }
-    return ((uint32_t)FAN_PWM_PERIOD_TICKS * duty_percent) / 100U;
+    return ((uint32_t)FAN_PWM_PERIOD_TICKS * duty_percent + 50U) / 100U;
 }
 
 void FanPwm_Init(void)
@@ -91,11 +92,11 @@ uint8_t FanPwm_SetDuty(uint8_t channel, uint8_t duty_percent)
     }
     else if (channel == 3U)
     {
-        TIM4->CCR3 = compare;
+        TIM4->CCR4 = compare; /* Fan 3: PB9 */
     }
     else
     {
-        TIM4->CCR4 = compare;
+        TIM4->CCR3 = compare; /* Fan 4: PB8 */
     }
     g_duty[channel - 1U] = duty_percent;
     return 1U;

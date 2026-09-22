@@ -260,7 +260,7 @@ void LoraP2PTX(void)
 
   if (g_lora_tx_pending == 0U)
   {
-    if (MasterQueues_ReceiveLoRa(&message, 0U) != pdPASS)
+    if (MasterQueues_ReceiveLoRa(&message) == 0U)
     {
       return;
     }
@@ -351,7 +351,7 @@ void LoraP2PRX(void)
       memset(&event, 0, sizeof(event));
       event.type = MASTER_EVENT_LORA_MESSAGE;
       event.data.lora_message = g_lora_received_message;
-      if (MasterQueues_SendEvent(&event, 0U) != pdPASS)
+      if (MasterQueues_SendEvent(&event) == 0U)
       {
         LoRaDiag.event_queue_drop_count++;
       }

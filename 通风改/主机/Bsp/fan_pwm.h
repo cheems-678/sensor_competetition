@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+/* Channels 1..4: PA1, PB1, PB9, PB8. Active-high 25 kHz, boot duty 0%. */
 void FanPwm_Init(void);
 uint8_t FanPwm_SetDuty(uint8_t channel, uint8_t duty_percent);
 uint8_t FanPwm_GetDuty(uint8_t channel);

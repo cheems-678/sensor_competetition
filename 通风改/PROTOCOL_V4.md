@@ -64,7 +64,7 @@
 | ---: | --- | --- |
 | 1 | PA1 | TIM2_CH2 |
 | 2 | PB1 | TIM3_CH4 |
-| 3 | PB8 | TIM4_CH3 |
-| 4 | PB9 | TIM4_CH4 |
+| 3 | PB9 | TIM4_CH4 |
+| 4 | PB8 | TIM4_CH3 |
 
 `0%` 为持续低电平，`100%` 为持续高电平。定时器和复用 GPIO 由 `fan_pwm.c` 直接初始化，不依赖 CubeMX 生成的 TIM 初始化函数。

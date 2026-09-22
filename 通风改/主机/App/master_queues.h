@@ -2,8 +2,6 @@
 #define MASTER_QUEUES_H
 
 #include <stdint.h>
-#include "FreeRTOS.h"
-#include "queue.h"
 #include "master_messages.h"
 
 #define MASTER_EVENT_QUEUE_DEPTH   (4U)
@@ -18,11 +16,11 @@ typedef struct
 extern MasterQueueDiagnostics MasterQueueDiag;
 
 uint8_t MasterQueues_Init(void);
-BaseType_t MasterQueues_SendEvent(const MasterEvent *event, TickType_t wait_ticks);
-BaseType_t MasterQueues_ReceiveEvent(MasterEvent *event, TickType_t wait_ticks);
-BaseType_t MasterQueues_SendLoRa(const LoRaMessage *message, TickType_t wait_ticks);
-BaseType_t MasterQueues_ReceiveLoRa(LoRaMessage *message, TickType_t wait_ticks);
-UBaseType_t MasterQueues_EventWaiting(void);
-UBaseType_t MasterQueues_LoRaWaiting(void);
+uint8_t MasterQueues_SendEvent(const MasterEvent *event);
+uint8_t MasterQueues_ReceiveEvent(MasterEvent *event);
+uint8_t MasterQueues_SendLoRa(const LoRaMessage *message);
+uint8_t MasterQueues_ReceiveLoRa(LoRaMessage *message);
+uint8_t MasterQueues_EventWaiting(void);
+uint8_t MasterQueues_LoRaWaiting(void);
 
 #endif /* MASTER_QUEUES_H */

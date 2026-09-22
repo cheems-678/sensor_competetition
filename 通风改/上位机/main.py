@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import math
 import sqlite3
 import struct
 import threading
@@ -325,6 +326,8 @@ class SerialEvent:
 
 
 class MonitorApp(tk.Tk):
+    FAN_PINS = ("PA1", "PB1", "PB9", "PB8")
+    FAN_ACK_TIMEOUT_S = 8.0
     FIELD_LABELS = (
         ("slave_temperature_c", "从机 BME 温度", "℃"),
         ("slave_humidity_pct", "从机 BME 湿度", "%RH"),
@@ -348,7 +351,9 @@ class MonitorApp(tk.Tk):
         self.database = TelemetryDatabase()
         self.flow_id = 0
         self.value_vars = {name: tk.StringVar(value="--") for name, _, _ in self.FIELD_LABELS}
-        self.duty_vars = [tk.IntVar(value=0) for _ in range(4)]
+        self.duty_vars = [tk.DoubleVar(value=0) for _ in range(4)]
+        self.fan_status_vars = [tk.StringVar(value="未发送") for _ in range(4)]
+        self.fan_pending = {}
         self._build_ui()
         self._refresh_ports()
         self.after(50, self._drain_events)
@@ -376,10 +381,17 @@ class MonitorApp(tk.Tk):
         fans = ttk.LabelFrame(self, text="四路风机 PWM（0–100%）")
         fans.pack(fill=tk.X, padx=12, pady=8)
         for index, variable in enumerate(self.duty_vars, start=1):
-            ttk.Label(fans, text=f"风机 {index}").grid(row=index - 1, column=0, padx=8, pady=5)
-            ttk.Scale(fans, from_=0, to=100, variable=variable, orient=tk.HORIZONTAL, length=420).grid(row=index - 1, column=1)
+            ttk.Label(fans, text=f"风机 {index} / {self.FAN_PINS[index - 1]}").grid(row=index - 1, column=0, padx=8, pady=5)
+            slider = ttk.Scale(fans, from_=0, to=100, variable=variable,
+                               orient=tk.HORIZONTAL, length=300,
+                               command=lambda value, ch=index: self._preview_fan(ch, value))
+            slider.grid(row=index - 1, column=1)
+            slider.bind("<ButtonRelease-1>", lambda event, ch=index: self._set_fan(ch))
+            slider.bind("<KeyRelease-Left>", lambda event, ch=index: self._set_fan(ch))
+            slider.bind("<KeyRelease-Right>", lambda event, ch=index: self._set_fan(ch))
             ttk.Spinbox(fans, from_=0, to=100, textvariable=variable, width=6).grid(row=index - 1, column=2, padx=8)
             ttk.Button(fans, text="发送", command=lambda ch=index: self._set_fan(ch)).grid(row=index - 1, column=3, padx=8)
+            ttk.Label(fans, textvariable=self.fan_status_vars[index - 1], width=20).grid(row=index - 1, column=4, padx=6)
 
         log_frame = ttk.LabelFrame(self, text="帧日志")
         log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
@@ -404,7 +416,8 @@ class MonitorApp(tk.Tk):
             messagebox.showerror("缺少依赖", "请安装 pyserial")
             return
         try:
-            self.serial_port = serial.Serial(self.port_var.get(), 115200, timeout=0.1)
+            self.serial_port = serial.Serial(self.port_var.get(), 115200,
+                                             timeout=0.1, write_timeout=0.5)
         except Exception as exc:
             messagebox.showerror("连接失败", str(exc))
             return
@@ -415,6 +428,9 @@ class MonitorApp(tk.Tk):
         self._append_log(f"已连接 {self.port_var.get()}")
 
     def _disconnect(self):
+        self.fan_pending.clear()
+        for status in self.fan_status_vars:
+            status.set("已断开，状态未知")
         self.stop_event.set()
         port, self.serial_port = self.serial_port, None
         if port is not None:
@@ -434,17 +450,45 @@ class MonitorApp(tk.Tk):
     def _send(self, frame: bytes):
         if self.serial_port is None:
             messagebox.showwarning("未连接", "请先连接控制室串口")
-            return
-        self.serial_port.write(frame)
+            return False
+        try:
+            if self.serial_port.write(frame) != len(frame):
+                raise IOError("串口未发送完整帧")
+        except Exception as exc:
+            self._append_log(f"发送失败: {exc}")
+            self._disconnect()
+            return False
         self._append_log("TX " + frame.hex(" ").upper())
+        return True
 
     def _request_telemetry(self):
         self._send(LoRaProtocol.cmd_read_telemetry(self._next_flow(), True))
 
-    def _set_fan(self, channel: int):
-        duty = max(0, min(100, int(self.duty_vars[channel - 1].get())))
+    @staticmethod
+    def _normalize_fan_duty(value) -> int:
+        number = float(value)
+        if not math.isfinite(number) or not 0 <= number <= 100:
+            raise ValueError("占空比必须在 0–100 之间")
+        return int(number + 0.5)
+
+    def _preview_fan(self, channel: int, value):
+        duty = self._normalize_fan_duty(value)
         self.duty_vars[channel - 1].set(duty)
-        self._send(LoRaProtocol.cmd_set_fan_speed(self._next_flow(), channel, duty))
+
+    def _set_fan(self, channel: int):
+        try:
+            duty = self._normalize_fan_duty(self.duty_vars[channel - 1].get())
+        except (ValueError, TypeError, tk.TclError):
+            messagebox.showwarning("输入错误", "请输入 0–100 的占空比")
+            return
+        self.duty_vars[channel - 1].set(duty)
+        flow = self._next_flow()
+        if self._send(LoRaProtocol.cmd_set_fan_speed(flow, channel, duty)):
+            # Newer settings supersede older confirmations for this channel.
+            self.fan_pending = {key: item for key, item in self.fan_pending.items()
+                                if item[0] != channel}
+            self.fan_pending[flow] = (channel, duty, time.monotonic())
+            self.fan_status_vars[channel - 1].set(f"等待确认 {duty}%")
 
     def _drain_events(self):
         while True:
@@ -457,6 +501,10 @@ class MonitorApp(tk.Tk):
             else:
                 self._append_log("串口错误: " + str(event.value))
                 self._disconnect()
+        for flow, (channel, duty, sent_at) in list(self.fan_pending.items()):
+            if time.monotonic() - sent_at >= self.FAN_ACK_TIMEOUT_S:
+                del self.fan_pending[flow]
+                self.fan_status_vars[channel - 1].set(f"{duty}% 确认超时")
         self.after(50, self._drain_events)
 
     def _handle_frame(self, frame: bytes):
@@ -474,8 +522,17 @@ class MonitorApp(tk.Tk):
                 self.value_vars[name].set("--" if value is None else f"{value:g}{(' ' + unit) if unit else ''}")
         elif packet["type"] == LoRaProtocol.MSG_ACK:
             self._append_log(f"ACK command=0x{packet['data'][0]:02X} status={packet['data'][1]}")
+            if packet["data"][0] == LoRaProtocol.MSG_SET_FAN_SPEED:
+                pending = self.fan_pending.pop(packet["flow_id"], None)
+                if pending is not None:
+                    channel, duty, _ = pending
+                    text = f"已确认 {duty}%" if packet["data"][1] == 0 else "主机拒绝执行"
+                    self.fan_status_vars[channel - 1].set(text)
         elif packet["type"] == LoRaProtocol.MSG_ERROR:
             self._append_log(f"ERROR code={packet['data'][0]}")
+            pending = self.fan_pending.pop(packet["flow_id"], None)
+            if pending is not None:
+                self.fan_status_vars[pending[0] - 1].set(f"失败 code={packet['data'][0]}")
 
     def _append_log(self, text: str):
         self.log.config(state=tk.NORMAL)

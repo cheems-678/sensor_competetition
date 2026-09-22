@@ -12,7 +12,7 @@
 #define MASTER_SLAVE_RESPONSE_TIMEOUT_MS         (3000UL)
 
 /* 主机 PA5 DHT11 单机联调开关：1 直接回复主机数据，0 等待从机汇总。 */
-#define MASTER_DIRECT_DHT11_TELEMETRY             (1U)
+#define MASTER_DIRECT_DHT11_TELEMETRY             (0U)
 
 /* PB0 雨滴输入：低电平表示 LM393 已检测到雨滴。 */
 #define MASTER_RAIN_ASSERT_MS                   (200UL)

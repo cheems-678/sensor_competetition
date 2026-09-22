@@ -11,6 +11,7 @@
 *.elf
 *.hex
 *.bin
+*.exe
 *.map
 *.lst
 *.lnp
@@ -36,6 +37,12 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Runtime data
+*.db
+
+# Keil output without a filename extension
+通风改/主机/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.0
 
 # Local agent work records
 .workbuddy/

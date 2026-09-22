@@ -93,7 +93,7 @@
 /*!< Uncomment the following line if you need to relocate the vector table
      anywhere in Flash or Sram, else the vector table is kept at the automatic
      remap of boot address selected */
-/* #define USER_VECT_TAB_ADDRESS */
+#define USER_VECT_TAB_ADDRESS
 
 #if defined(USER_VECT_TAB_ADDRESS)
 /*!< Uncomment the following line if you need to relocate your vector Table
@@ -182,7 +182,10 @@ void SystemInit (void)
 
   /* Configure the Vector Table location -------------------------------------*/
 #if defined(USER_VECT_TAB_ADDRESS)
-  SCB->VTOR = VECT_TAB_BASE_ADDRESS | VECT_TAB_OFFSET; /* Vector Table Relocation in Internal SRAM. */
+  /* Select the application's vector table before HAL enables any interrupts. */
+  SCB->VTOR = VECT_TAB_BASE_ADDRESS | VECT_TAB_OFFSET;
+  __DSB();
+  __ISB();
 #endif /* USER_VECT_TAB_ADDRESS */
 }
 

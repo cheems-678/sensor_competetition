@@ -8,8 +8,10 @@
 #include "master_config.h"
 #include "master_identity.h"
 #include "master_ingress.h"
+#include "master_light_control.h"
 #include "master_messages.h"
 #include "master_queues.h"
+#include "stm32f1xx_hal.h"
 
 #define MASTER_ERROR_BUSY          (1U)
 #define MASTER_ERROR_SLAVE_TIMEOUT (2U)
@@ -56,7 +58,7 @@ static void MasterRuntime_SetAddress(LoRaMessage *message,
 
 static uint8_t MasterRuntime_Queue(const LoRaMessage *message)
 {
-    if (MasterQueues_SendLoRa(message, 0U) != pdPASS)
+    if (MasterQueues_SendLoRa(message) == 0U)
     {
         MasterRuntimeDiag.lora_queue_failure_count++;
         return 0U;
@@ -182,6 +184,8 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
             g_pending.active = 1U;
             g_pending.flow_id = message->flow_id;
             g_pending.request_tick = now_ms;
+            MasterRuntimeDiag.slave_request_queued_count++;
+            MasterRuntimeDiag.last_request_flow_id = message->flow_id;
         }
         return;
 #endif
@@ -204,13 +208,23 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
 static void MasterRuntime_HandleSlave(const LoRaMessage *message,
                                       uint32_t now_ms)
 {
+    MasterRuntimeDiag.last_slave_flow_id = message->flow_id;
     if ((message->type != LORA_MSG_TELEMETRY) ||
         (g_pending.active == 0U) ||
         (message->flow_id != g_pending.flow_id))
     {
+        MasterRuntimeDiag.slave_response_unmatched_count++;
         return;
     }
 
+    MasterRuntimeDiag.slave_response_match_count++;
+    MasterRuntimeDiag.last_slave_response_ms = now_ms - g_pending.request_tick;
+    if (MasterRuntimeDiag.last_slave_response_ms >
+        MasterRuntimeDiag.max_slave_response_ms)
+    {
+        MasterRuntimeDiag.max_slave_response_ms =
+            MasterRuntimeDiag.last_slave_response_ms;
+    }
     if (MasterRuntime_QueueTelemetry(message->flow_id, now_ms) != 0U)
     {
         g_pending.active = 0U;
@@ -223,13 +237,16 @@ void MasterRuntime_Init(void)
     memset(&g_pending, 0, sizeof(g_pending));
     memset(&g_dht11_cache, 0, sizeof(g_dht11_cache));
     MasterDht11_Init();
+    MasterLight_Init(HAL_GetTick());
 }
 
-void MasterRuntime_ProcessOne(uint32_t now_ms, TickType_t wait_ticks)
+void MasterRuntime_ProcessOne(uint32_t now_ms)
 {
     MasterIngressRoute route;
 
-    if (MasterQueues_ReceiveEvent(&g_event, wait_ticks) == pdPASS)
+    MasterLight_Process(now_ms);
+
+    if (MasterQueues_ReceiveEvent(&g_event) != 0U)
     {
         if (g_event.type == MASTER_EVENT_LORA_MESSAGE)
         {
@@ -257,6 +274,7 @@ void MasterRuntime_ProcessOne(uint32_t now_ms, TickType_t wait_ticks)
          MASTER_SLAVE_RESPONSE_TIMEOUT_MS))
     {
         MasterRuntime_QueueError(g_pending.flow_id, MASTER_ERROR_SLAVE_TIMEOUT);
+        MasterRuntimeDiag.last_timeout_flow_id = g_pending.flow_id;
         g_pending.active = 0U;
         MasterRuntimeDiag.telemetry_timeout_count++;
     }
