@@ -1,0 +1,47 @@
+# STM32 / Keil build artifacts
+**/Objects/
+**/Listings/
+**/Debug/
+**/Release/
+*.o
+*.d
+*.crf
+*.dep
+*.axf
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.lnp
+*.log
+
+# Per-user Keil configuration
+*.uvguix.*
+*.uvoptx
+**/DebugConfig/
+*.dbgconf
+*.dbgconf.base@*
+*.bak
+
+# CMake generated directories
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local agent work records
+.workbuddy/
+
+# Editors and operating system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
