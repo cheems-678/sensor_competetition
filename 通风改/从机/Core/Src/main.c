@@ -31,7 +31,7 @@ int main(void)
 
     for (;;)
     {
-        /* 当前阶段只验证 v4 帧结构；传感器采样入口暂不连接。 */
+        /* Bare-metal BME sampling and bounded LoRa request/reply service. */
         LoraP2PTrans();
     }
 }

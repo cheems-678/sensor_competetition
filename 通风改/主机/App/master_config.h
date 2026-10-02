@@ -8,11 +8,11 @@
 #define MASTER_TEMP_CACHE_FRESH_MS               (5000UL)
 #define MASTER_ENV_CACHE_FRESH_MS                (5000UL)
 #define MASTER_BME_CACHE_FRESH_MS                (2000UL)
-#define MASTER_DHT11_CACHE_FRESH_MS              (2000UL)
-#define MASTER_SLAVE_RESPONSE_TIMEOUT_MS         (3000UL)
-
-/* 主机 PA5 DHT11 单机联调开关：1 直接回复主机数据，0 等待从机汇总。 */
-#define MASTER_DIRECT_DHT11_TELEMETRY             (0U)
+#define MASTER_BME_SAMPLE_INTERVAL_MS            (1000UL)
+#define MASTER_BME_RETRY_MS                      (1000UL)
+#define MASTER_BME_CONVERSION_TIMEOUT_MS         (50UL)
+#define MASTER_SLAVE_RESPONSE_TIMEOUT_MS          (500UL)
+#define MASTER_SLAVE_QUEUE_TIMEOUT_MS             (1000UL)
 
 /* PB0 雨滴输入：低电平表示 LM393 已检测到雨滴。 */
 #define MASTER_RAIN_ASSERT_MS                   (200UL)

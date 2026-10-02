@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+/* 当前只联调控制室与主机风扇；从机未供电，不自动轮询遥测。设为 1 恢复轮询。 */
+#define GATEWAY_AUTO_POLL_ENABLED (0U)
+
 /*
  * 控制室上位机口与 LoRa 口采用同一份应用层报文。
  * 回调只会在 GatewayRuntime_Process() 的任务上下文中调用，绝不在串口中断内调用。

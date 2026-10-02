@@ -9,7 +9,7 @@ typedef struct
     uint32_t failure_count;
     uint32_t last_elapsed_ms;
     uint32_t last_dma_isr;
-    uint32_t last_timer_restore_ok;
+    uint32_t last_output_idle_ok;
     uint32_t last_red;
     uint32_t last_green;
     uint32_t last_blue;

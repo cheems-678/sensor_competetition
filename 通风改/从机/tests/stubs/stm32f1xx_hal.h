@@ -1,0 +1,48 @@
+#ifndef TEST_HAL_H
+#define TEST_HAL_H
+#include <stdint.h>
+#include <stddef.h>
+typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
+typedef enum { GPIO_PIN_RESET, GPIO_PIN_SET } GPIO_PinState;
+typedef struct { uint32_t CR1, SR2; } I2C_TypeDef;
+typedef struct { uint32_t ClockSpeed, DutyCycle, OwnAddress1, AddressingMode,
+    DualAddressMode, OwnAddress2, GeneralCallMode, NoStretchMode; } I2C_InitTypeDef;
+typedef struct { I2C_TypeDef *Instance; I2C_InitTypeDef Init; uint32_t ErrorCode; } I2C_HandleTypeDef;
+typedef struct { uint32_t Pin, Mode, Pull, Speed; } GPIO_InitTypeDef;
+extern I2C_TypeDef fake_i2c1;
+#define I2C1 (&fake_i2c1)
+#define GPIOB ((void *)1)
+#define GPIO_PIN_6 64U
+#define GPIO_PIN_7 128U
+#define GPIO_MODE_AF_OD 1U
+#define GPIO_MODE_OUTPUT_OD 2U
+#define GPIO_NOPULL 0U
+#define GPIO_SPEED_FREQ_HIGH 3U
+#define I2C_DUTYCYCLE_2 0U
+#define I2C_ADDRESSINGMODE_7BIT 0U
+#define I2C_DUALADDRESS_DISABLE 0U
+#define I2C_GENERALCALL_DISABLE 0U
+#define I2C_NOSTRETCH_DISABLE 0U
+#define I2C_MEMADD_SIZE_8BIT 1U
+#define I2C_CR1_PE 1U
+#define I2C_CR1_SWRST 0x8000U
+#define I2C_SR2_BUSY 2U
+#define CLEAR_BIT(reg, bits) ((reg) &= ~(bits))
+#define SET_BIT(reg, bits) ((reg) |= (bits))
+#define __DSB() ((void)0)
+#define __HAL_RCC_GPIOB_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_I2C1_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_I2C1_CLK_DISABLE() ((void)0)
+uint32_t HAL_GetTick(void);
+void HAL_Delay(uint32_t delay);
+HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *, uint16_t, uint16_t,
+    uint16_t, uint8_t *, uint16_t, uint32_t);
+HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *, uint16_t, uint16_t,
+    uint16_t, uint8_t *, uint16_t, uint32_t);
+void HAL_GPIO_Init(void *, GPIO_InitTypeDef *);
+void HAL_GPIO_DeInit(void *, uint16_t);
+void HAL_GPIO_WritePin(void *, uint16_t, GPIO_PinState);
+GPIO_PinState HAL_GPIO_ReadPin(void *, uint16_t);
+#endif

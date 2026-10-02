@@ -10,19 +10,22 @@
 HAL_StatusTypeDef BME280_WriteReg(BME280_HandleTypeDef *bme,
                                   uint8_t reg, uint8_t val)
 {
+    if ((bme == NULL) || (bme->hi2c == NULL)) { return HAL_ERROR; }
     return HAL_I2C_Mem_Write(bme->hi2c,
                              (uint16_t)(bme->i2c_addr << 1),
                              reg, I2C_MEMADD_SIZE_8BIT,
-                             &val, 1, 100);
+                             &val, 1, 10);
 }
 
 HAL_StatusTypeDef BME280_ReadRegs(BME280_HandleTypeDef *bme,
                                   uint8_t reg, uint8_t *buf, uint8_t len)
 {
+    if ((bme == NULL) || (bme->hi2c == NULL) || (buf == NULL) || (len == 0U))
+    { return HAL_ERROR; }
     return HAL_I2C_Mem_Read(bme->hi2c,
                             (uint16_t)(bme->i2c_addr << 1),
                             reg, I2C_MEMADD_SIZE_8BIT,
-                            buf, len, 100);
+                            buf, len, 10);
 }
 
 /* ==================== 初始化 ==================== */
@@ -32,26 +35,42 @@ HAL_StatusTypeDef BME280_Init(BME280_HandleTypeDef *bme,
                               uint8_t              i2c_addr)
 {
     uint8_t chip_id = 0;
+    uint8_t calib[26];
+    uint8_t calib_h[7];
+    uint8_t status;
+    uint32_t start;
+
+    if ((bme == NULL) || (hi2c == NULL)) { return HAL_ERROR; }
 
     bme->hi2c     = hi2c;
     bme->i2c_addr = i2c_addr;
     bme->t_fine   = 0;
+    bme->chip_id = 0U;
 
     /* 读取 Chip ID 验证通信 */
     if (BME280_ReadRegs(bme, BME280_REG_CHIPID, &chip_id, 1) != HAL_OK) {
         return HAL_ERROR;
     }
-    if (chip_id != 0x60 && chip_id != 0x58) {
-        return HAL_ERROR;  /* 不是 BME280/BMP280 */
+    bme->chip_id = chip_id;
+    if (chip_id != 0x60) {
+        return HAL_ERROR;  /* BMP280 has no humidity channel. */
     }
 
     /* 软复位 */
-    BME280_SoftReset(bme);
+    if (BME280_SoftReset(bme) != HAL_OK) { return HAL_ERROR; }
     HAL_Delay(10);
+    start = HAL_GetTick();
+    do {
+        if (BME280_ReadRegs(bme, BME280_REG_STATUS, &status, 1U) != HAL_OK)
+        { return HAL_ERROR; }
+        if ((status & 1U) == 0U) { break; }
+        if ((uint32_t)(HAL_GetTick() - start) >= 20U) { return HAL_TIMEOUT; }
+        HAL_Delay(1U);
+    } while (1);
 
     /* ---- 读取校准数据 ---- */
-    uint8_t calib[26]; /* 0x88..0xA1 = 26 bytes */
-    BME280_ReadRegs(bme, BME280_REG_DIG_T1, calib, 26);
+    if (BME280_ReadRegs(bme, BME280_REG_DIG_T1, calib, 26) != HAL_OK)
+    { return HAL_ERROR; }
 
     bme->dig_T1 = (uint16_t)(calib[0]  | (calib[1]  << 8));
     bme->dig_T2 = (int16_t) (calib[2]  | (calib[3]  << 8));
@@ -68,8 +87,10 @@ HAL_StatusTypeDef BME280_Init(BME280_HandleTypeDef *bme,
     bme->dig_H1 = calib[25]; /* 0xA1 */
 
     /* 湿度校准 H2..H6 (不连续区域) */
-    uint8_t calib_h[7]; /* 0xE1..0xE7 = 7 bytes */
-    BME280_ReadRegs(bme, BME280_REG_DIG_H2, calib_h, 7);
+    if ((bme->dig_T1 == 0U) || (bme->dig_T1 == 0xFFFFU) ||
+        (bme->dig_P1 == 0U) || (bme->dig_P1 == 0xFFFFU)) { return HAL_ERROR; }
+    if (BME280_ReadRegs(bme, BME280_REG_DIG_H2, calib_h, 7) != HAL_OK)
+    { return HAL_ERROR; }
 
     bme->dig_H2 = (int16_t)(calib_h[0] | (calib_h[1] << 8));
     bme->dig_H3 = calib_h[2];
@@ -80,6 +101,7 @@ HAL_StatusTypeDef BME280_Init(BME280_HandleTypeDef *bme,
     bme->dig_H5_msb = (int8_t)calib_h[5];
     bme->dig_H5_lsb = (int8_t)((calib_h[4] >> 4) & 0x0F);
     bme->dig_H6     = (int8_t)calib_h[6];
+    if (bme->dig_H2 == 0 || bme->dig_H2 == -1) { return HAL_ERROR; }
 
     return HAL_OK;
 }
@@ -100,6 +122,9 @@ HAL_StatusTypeDef BME280_Config(BME280_HandleTypeDef *bme,
                                 BME280_Filter          filter)
 {
     uint8_t val;
+    if ((bme == NULL) || (osrs_t > BME280_OVERSAMPLING_X16) ||
+        (osrs_p > BME280_OVERSAMPLING_X16) || (osrs_h > BME280_OVERSAMPLING_X16) ||
+        (filter > BME280_FILTER_X16)) { return HAL_ERROR; }
 
     /* ctrl_hum: osrs_h[2:0] */
     val = (uint8_t)(osrs_h & 0x07);
@@ -131,7 +156,23 @@ static HAL_StatusTypeDef BME280_ReadRaw(BME280_HandleTypeDef *bme,
     uint8_t raw[8];
     HAL_StatusTypeDef ret;
 
-    /* 1. 设置 forced 模式触发测量 */
+    uint8_t status;
+    ret = BME280_ReadRegs(bme, BME280_REG_STATUS, &status, 1);
+    if (ret != HAL_OK) { return ret; }
+    if ((status & 0x09U) != 0U) { return HAL_BUSY; }
+    ret = BME280_ReadRegs(bme, BME280_REG_PRESS_MSB, raw, 8);
+    if (ret != HAL_OK) return ret;
+    *adc_P = ((int32_t)raw[0] << 12) | ((int32_t)raw[1] << 4) | (raw[2] >> 4);
+    *adc_T = ((int32_t)raw[3] << 12) | ((int32_t)raw[4] << 4) | (raw[5] >> 4);
+    *adc_H = ((int32_t)raw[6] << 8) | (int32_t)raw[7];
+    if ((*adc_P == 0x80000) || (*adc_T == 0x80000) || (*adc_H == 0x8000))
+    { return HAL_ERROR; }
+    return HAL_OK;
+}
+
+HAL_StatusTypeDef BME280_TriggerMeasurement(BME280_HandleTypeDef *bme)
+{
+    HAL_StatusTypeDef ret;
     uint8_t ctrl = 0;
     ret = BME280_ReadRegs(bme, BME280_REG_CTRL_MEAS, &ctrl, 1);
     if (ret != HAL_OK) return ret;
@@ -140,21 +181,6 @@ static HAL_StatusTypeDef BME280_ReadRaw(BME280_HandleTypeDef *bme,
     ctrl |= BME280_MODE_FORCED;
     ret = BME280_WriteReg(bme, BME280_REG_CTRL_MEAS, ctrl);
     if (ret != HAL_OK) return ret;
-
-    /* 2. 等待测量完成 (status[3]=measuring, status[0]=im_update) */
-    uint8_t status;
-    do {
-        HAL_Delay(1);
-        BME280_ReadRegs(bme, BME280_REG_STATUS, &status, 1);
-    } while (status & 0x08);  /* measuring bit */
-
-    /* 3. 读取 8 字节数据: P[0:2] T[3:5] H[6:7] */
-    ret = BME280_ReadRegs(bme, BME280_REG_PRESS_MSB, raw, 8);
-    if (ret != HAL_OK) return ret;
-
-    *adc_P = ((int32_t)raw[0] << 12) | ((int32_t)raw[1] << 4) | (raw[2] >> 4);
-    *adc_T = ((int32_t)raw[3] << 12) | ((int32_t)raw[4] << 4) | (raw[5] >> 4);
-    *adc_H = ((int32_t)raw[6] << 8)  |  (int32_t)raw[7];
 
     return HAL_OK;
 }
@@ -166,16 +192,13 @@ static HAL_StatusTypeDef BME280_ReadRaw(BME280_HandleTypeDef *bme,
  */
 static int32_t BME280_Compensate_T(BME280_HandleTypeDef *bme, int32_t adc_T)
 {
-    int32_t var1, var2, T;
+    int64_t var1, var2;
 
-    var1 = ((((adc_T >> 3) - ((int32_t)bme->dig_T1 << 1))) *
-            ((int32_t)bme->dig_T2)) >> 11;
-    var2 = (((((adc_T >> 4) - ((int32_t)bme->dig_T1)) *
-              ((adc_T >> 4) - ((int32_t)bme->dig_T1))) >> 12) *
-            ((int32_t)bme->dig_T3)) >> 14;
-    bme->t_fine = var1 + var2;
-    T = (bme->t_fine * 5 + 128) >> 8;   /* °C × 100 */
-    return T;
+    var1 = ((((adc_T >> 3) - ((int64_t)bme->dig_T1 * 2))) * bme->dig_T2) >> 11;
+    var2 = (((((adc_T >> 4) - (int64_t)bme->dig_T1) *
+              ((adc_T >> 4) - (int64_t)bme->dig_T1)) >> 12) * bme->dig_T3) >> 14;
+    bme->t_fine = (int32_t)(var1 + var2);
+    return (bme->t_fine * 5 + 128) >> 8;   /* °C × 100 */
 }
 
 /**
@@ -187,10 +210,10 @@ static uint32_t BME280_Compensate_P(BME280_HandleTypeDef *bme, int32_t adc_P)
 
     var1 = ((int64_t)bme->t_fine) - 128000;
     var2 = var1 * var1 * (int64_t)bme->dig_P6;
-    var2 = var2 + ((var1 * (int64_t)bme->dig_P5) << 17);
-    var2 = var2 + (((int64_t)bme->dig_P4) << 35);
+    var2 = var2 + (var1 * (int64_t)bme->dig_P5) * 131072LL;
+    var2 = var2 + ((int64_t)bme->dig_P4) * 34359738368LL;
     var1 = ((var1 * var1 * (int64_t)bme->dig_P3) >> 8) +
-           ((var1 * (int64_t)bme->dig_P2) << 12);
+           (var1 * (int64_t)bme->dig_P2) * 4096LL;
     var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)bme->dig_P1) >> 33;
 
     if (var1 == 0) return 0;
@@ -199,7 +222,7 @@ static uint32_t BME280_Compensate_P(BME280_HandleTypeDef *bme, int32_t adc_P)
     p = (((p << 31) - var2) * 3125) / var1;
     var1 = (((int64_t)bme->dig_P9) * (p >> 13) * (p >> 13)) >> 25;
     var2 = (((int64_t)bme->dig_P8) * p) >> 19;
-    p = ((p + var1 + var2) >> 8) + (((int64_t)bme->dig_P7) << 4);
+    p = ((p + var1 + var2) >> 8) + ((int64_t)bme->dig_P7) * 16LL;
 
     return (uint32_t)(p >> 8);   /* Q24.8 (Pa*256) -> Pa */
 }
@@ -209,7 +232,7 @@ static uint32_t BME280_Compensate_P(BME280_HandleTypeDef *bme, int32_t adc_P)
  */
 static uint32_t BME280_Compensate_H(BME280_HandleTypeDef *bme, int32_t adc_H)
 {
-    int32_t v_x1_u32r;
+    int64_t v_x1_u32r;
 
     v_x1_u32r = bme->t_fine - (int32_t)76800;
 
@@ -219,9 +242,9 @@ static uint32_t BME280_Compensate_H(BME280_HandleTypeDef *bme, int32_t adc_H)
     if (h4 > 0x07FF) h4 -= 0x1000;
     if (h5 > 0x07FF) h5 -= 0x1000;
 
-    int32_t var_H;
+    int64_t var_H;
 
-    var_H = (((((int32_t)adc_H << 14) - ((int32_t)h4 << 20) - ((int32_t)h5 * v_x1_u32r))
+    var_H = (((((int64_t)adc_H * 16384) - ((int64_t)h4 * 1048576) - ((int64_t)h5 * v_x1_u32r))
               + (int32_t)16384) >> 15)
           * (((((((v_x1_u32r * (int32_t)bme->dig_H6) >> 10)
                * (((v_x1_u32r * (int32_t)bme->dig_H3) >> 11) + (int32_t)32768)) >> 10)
@@ -238,19 +261,39 @@ static uint32_t BME280_Compensate_H(BME280_HandleTypeDef *bme, int32_t adc_H)
 
 /* ==================== 公开读取 API ==================== */
 
-HAL_StatusTypeDef BME280_ReadAll(BME280_HandleTypeDef *bme,
+HAL_StatusTypeDef BME280_ReadMeasurement(BME280_HandleTypeDef *bme,
                                  int32_t   *temperature,
                                  uint32_t  *pressure,
                                  uint32_t  *humidity)
 {
     int32_t adc_T, adc_P, adc_H;
+    HAL_StatusTypeDef status;
+    if (bme == NULL || temperature == NULL || pressure == NULL || humidity == NULL)
+    { return HAL_ERROR; }
 
-    if (BME280_ReadRaw(bme, &adc_T, &adc_P, &adc_H) != HAL_OK)
-        return HAL_ERROR;
+    status = BME280_ReadRaw(bme, &adc_T, &adc_P, &adc_H);
+    if (status != HAL_OK) { return status; }
 
     *temperature = BME280_Compensate_T(bme, adc_T);
+    if (*temperature < -4000 || *temperature > 8500) { return HAL_ERROR; }
     *pressure    = BME280_Compensate_P(bme, adc_P);
     *humidity    = BME280_Compensate_H(bme, adc_H);
 
     return HAL_OK;
+}
+
+HAL_StatusTypeDef BME280_ReadAll(BME280_HandleTypeDef *bme,
+    int32_t *temperature, uint32_t *pressure, uint32_t *humidity)
+{
+    uint32_t start;
+    HAL_StatusTypeDef status = BME280_TriggerMeasurement(bme);
+    if (status != HAL_OK) { return status; }
+    start = HAL_GetTick();
+    HAL_Delay(10U);
+    do {
+        status = BME280_ReadMeasurement(bme, temperature, pressure, humidity);
+        if (status != HAL_BUSY) { return status; }
+        HAL_Delay(1U);
+    } while ((uint32_t)(HAL_GetTick() - start) < 50U);
+    return HAL_TIMEOUT;
 }

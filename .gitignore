@@ -42,7 +42,9 @@ venv/
 *.db
 
 # Keil output without a filename extension
-通风改/主机/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.0
+**/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.0
+**/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.build_log.htm
+**/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.htm
 
 # Local agent work records
 .workbuddy/

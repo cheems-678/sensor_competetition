@@ -1,6 +1,7 @@
 #include "slave_protocol_runtime.h"
 
 #include "lora.h"
+#include "slave_bme280.h"
 
 #include <string.h>
 
@@ -56,6 +57,15 @@ static uint8_t g_last_temp_frame[FRAME_MAX_SIZE];
 static uint16_t g_last_temp_frame_length;
 static uint16_t g_last_temp_flow_id;
 static uint8_t g_last_temp_valid;
+static uint32_t g_last_temp_tick;
+static uint8_t g_last_force;
+static uint8_t g_force_pending;
+static uint16_t g_force_flow;
+static uint32_t g_force_generation;
+static volatile uint32_t g_last_rx_tick;
+static uint32_t g_seen_overflow;
+static uint32_t g_tx_sample_tick, g_last_sample_tick;
+static uint8_t g_tx_sample_valid, g_last_sample_valid;
 
 SlaveRuntimeDiagnostics SlaveRuntimeDiag;
 
@@ -163,8 +173,7 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
 {
     uint8_t payload_length = FRAME_TELEMETRY_PAYLOAD_SIZE;
     uint16_t crc;
-
-    (void)request_type;
+    SlaveBme280Sample sample;
 
     g_tx_frame[0] = FRAME_HEAD_1;
     g_tx_frame[1] = FRAME_HEAD_2;
@@ -178,10 +187,9 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_tx_frame[9] = (uint8_t)(flow_id >> 8U);
     g_tx_frame[10] = payload_length;
 
-    /* Placeholder-only payload. Hardware values will be connected after the
-       v4 frame layout has been independently verified. */
+    /* Slave response uses the original first BME slots; master aggregates it. */
     memset(&g_tx_frame[11], 0, payload_length);
-    g_tx_frame[11] = 0U; /* validity flags: no real source connected */
+    g_tx_frame[11] = 0U;
     SlaveRuntime_WriteU16(&g_tx_frame[12],
                           (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
     SlaveRuntime_WriteU16(&g_tx_frame[14], SLAVE_HUMIDITY_INVALID_X10);
@@ -192,6 +200,15 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     SlaveRuntime_WriteU16(&g_tx_frame[25],
                           (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
     SlaveRuntime_WriteU16(&g_tx_frame[27], SLAVE_HUMIDITY_INVALID_X10);
+    g_tx_sample_valid = 0U;
+    if (SlaveBme280_GetSample(g_current_tick, &sample) != 0U)
+    {
+        g_tx_sample_tick = SlaveBme280Diag.sample_tick;
+        g_tx_sample_valid = 1U;
+        SlaveRuntime_WriteU16(&g_tx_frame[12], (uint16_t)sample.temperature_x10);
+        SlaveRuntime_WriteU16(&g_tx_frame[14], sample.humidity_x10);
+        SlaveRuntime_WriteU32(&g_tx_frame[16], sample.pressure_pa);
+    }
 
     g_tx_frame_length = (uint16_t)(FRAME_MIN_SIZE + payload_length);
     crc = SlaveRuntime_Crc16(&g_tx_frame[2], (uint16_t)(9U + payload_length));
@@ -202,6 +219,10 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_last_temp_frame_length = g_tx_frame_length;
     g_last_temp_flow_id = flow_id;
     g_last_temp_valid = 1U;
+    g_last_temp_tick = g_current_tick;
+    g_last_force = request_type;
+    g_last_sample_valid = g_tx_sample_valid;
+    g_last_sample_tick = g_tx_sample_tick;
 
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = g_current_tick + SLAVE_REPLY_DELAY_MS;
@@ -215,6 +236,8 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
 
     if ((message->type == FRAME_TYPE_READ_TELEMETRY) &&
         (g_last_temp_valid != 0U) &&
+        ((uint32_t)(g_current_tick - g_last_temp_tick) < 2000U) &&
+        (message->payload[0] == g_last_force) &&
         (message->flow_id == g_last_temp_flow_id))
     {
         last_frame = g_last_temp_frame;
@@ -233,6 +256,8 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
         g_tx_attempt_count = 0U;
         g_tx_not_before_tick = g_current_tick + SLAVE_REPLY_DELAY_MS;
         g_tx_pending = 1U;
+        g_tx_sample_valid = g_last_sample_valid;
+        g_tx_sample_tick = g_last_sample_tick;
     }
     return 1U;
 }
@@ -250,17 +275,33 @@ static void SlaveRuntime_HandleMessage(const SlaveMessage *message)
         return;
     }
 
+    if (g_force_pending != 0U)
+    {
+        if (message->flow_id == g_force_flow && message->payload[0] == 1U)
+        { SlaveRuntimeDiag.duplicate_request_count++; }
+        else { SlaveRuntimeDiag.ignored_message_count++; }
+        return;
+    }
     if (SlaveRuntime_QueueDuplicate(message) != 0U)
     {
         return;
     }
 
-    if (g_tx_pending != 0U)
+    if ((g_tx_pending != 0U) || (g_force_pending != 0U))
     {
         SlaveRuntimeDiag.ignored_message_count++;
         return;
     }
-    SlaveRuntime_BuildResponse(message->type, message->flow_id);
+    SlaveRuntimeDiag.request_count++;
+    SlaveRuntimeDiag.last_flow_id = message->flow_id;
+    if (message->payload[0] != 0U)
+    {
+        g_force_pending = 1U;
+        g_force_flow = message->flow_id;
+        g_force_generation = SlaveBme280Diag.completed_count;
+        SlaveBme280_RequestSample(g_current_tick);
+    }
+    else { SlaveRuntime_BuildResponse(0U, message->flow_id); }
 }
 
 static void SlaveRuntime_PushByte(uint8_t byte)
@@ -336,6 +377,11 @@ void SlaveRuntime_Init(uint8_t local_group)
     g_last_temp_frame_length = 0U;
     g_last_temp_flow_id = 0U;
     g_last_temp_valid = 0U;
+    g_force_pending = 0U;
+    g_last_temp_tick = g_last_rx_tick = HAL_GetTick();
+    g_seen_overflow = 0U;
+    g_tx_sample_valid = g_last_sample_valid = 0U;
+    SlaveBme280_Init(HAL_GetTick());
     (void)memset(&SlaveRuntimeDiag, 0, sizeof(SlaveRuntimeDiag));
 }
 
@@ -354,6 +400,7 @@ void SlaveRuntime_PushRxByteFromIsr(uint8_t byte)
         return;
     }
     head = g_rx_ring.head;
+    g_last_rx_tick = HAL_GetTick();
     next_head = (uint16_t)((head + 1U) & RX_RING_MASK);
     if (next_head == g_rx_ring.tail)
     {
@@ -370,23 +417,54 @@ void SlaveRuntime_Process(uint32_t now_ms)
     uint8_t byte;
     uint16_t count = 0U;
 
+    SlaveBme280_Process(now_ms);
+    now_ms = HAL_GetTick();
     g_current_tick = now_ms;
+    if ((g_seen_overflow != g_rx_ring.overflow_count) ||
+        ((g_frame_length != 0U) && ((uint32_t)(now_ms - g_last_rx_tick) >= 200U)))
+    {
+        SlaveRuntime_ResetParser();
+        g_seen_overflow = g_rx_ring.overflow_count;
+    }
     while ((count < 128U) && (SlaveRuntime_PopRx(&byte) != 0U))
     {
         SlaveRuntime_PushByte(byte);
         count++;
     }
+    if ((g_force_pending != 0U) &&
+        (SlaveBme280Diag.completed_count != g_force_generation))
+    {
+        SlaveRuntime_BuildResponse(1U, g_force_flow);
+        g_force_pending = 0U;
+    }
     if ((g_tx_pending != 0U) &&
+        ((uint32_t)(now_ms - g_last_rx_tick) >= SLAVE_REPLY_DELAY_MS) &&
         (SlaveRuntime_DeadlineReached(now_ms, g_tx_not_before_tick) != 0U))
     {
+        if ((g_tx_sample_valid != 0U) &&
+            ((SlaveBme280Diag.sample_valid == 0U) ||
+             ((uint32_t)(now_ms - g_tx_sample_tick) >= 2000U)))
+        {
+            uint16_t crc;
+            SlaveRuntime_WriteU16(&g_tx_frame[12], 0x8000U);
+            SlaveRuntime_WriteU16(&g_tx_frame[14], 0xFFFFU);
+            SlaveRuntime_WriteU32(&g_tx_frame[16], 0xFFFFFFFFUL);
+            crc = SlaveRuntime_Crc16(&g_tx_frame[2], 27U);
+            g_tx_frame[29] = (uint8_t)crc;
+            g_tx_frame[30] = (uint8_t)(crc >> 8U);
+            memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
+            g_tx_sample_valid = g_last_sample_valid = 0U;
+        }
         if (LORA_SendData(g_tx_frame, g_tx_frame_length) != 0U)
         {
             g_tx_pending = 0U;
             g_tx_attempt_count = 0U;
+            SlaveRuntimeDiag.reply_count++;
         }
         else
         {
             g_tx_attempt_count++;
+            g_tx_not_before_tick = now_ms + 10U;
             if (g_tx_attempt_count >= TX_RETRY_COUNT)
             {
                 g_tx_pending = 0U;

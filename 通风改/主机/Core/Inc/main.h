@@ -68,15 +68,16 @@ void Error_Handler(void);
 #define LORA_RESET_Pin GPIO_PIN_7
 #define LORA_RESET_GPIO_Port GPIOB
 #define FAN1_PWM_Pin GPIO_PIN_1
-#define FAN1_PWM_GPIO_Port GPIOA
-#define FAN2_PWM_Pin GPIO_PIN_1
+#define FAN1_PWM_GPIO_Port GPIOB
+#define FAN2_PWM_Pin GPIO_PIN_8
 #define FAN2_PWM_GPIO_Port GPIOB
-#define FAN3_PWM_Pin GPIO_PIN_8
-#define FAN3_PWM_GPIO_Port GPIOB
-#define FAN4_PWM_Pin GPIO_PIN_9
-#define FAN4_PWM_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+
+#define BME280_SCL_Pin GPIO_PIN_10
+#define BME280_SCL_GPIO_Port GPIOB
+#define BME280_SDA_Pin GPIO_PIN_11
+#define BME280_SDA_GPIO_Port GPIOB
 
 /* USER CODE END Private defines */
 

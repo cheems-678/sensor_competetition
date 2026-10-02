@@ -92,6 +92,7 @@ typedef enum {
 typedef struct {
     I2C_HandleTypeDef *hi2c;             /* HAL I2C 句柄               */
     uint8_t            i2c_addr;         /* 7-bit I2C 地址             */
+    uint8_t            chip_id;
 
     /* 校准数据 (芯片出厂固化，不可改) */
     uint16_t dig_T1;
@@ -119,7 +120,7 @@ HAL_StatusTypeDef BME280_Init(BME280_HandleTypeDef *bme,
                               uint8_t              i2c_addr);
 
 /**
- * @brief  配置传感器参数并进入强制模式
+ * @brief  配置传感器参数并进入休眠，由 TriggerMeasurement 触发强制测量
  * @param  bme       BME280 句柄指针
  * @param  osrs_t    温度过采样
  * @param  osrs_p    气压过采样
@@ -140,7 +141,8 @@ HAL_StatusTypeDef BME280_Config(BME280_HandleTypeDef *bme,
  * @param  pressure     输出气压 (Pa)
  * @param  humidity     输出湿度 (×1024, 单位 %RH)
  * @return HAL_OK / HAL_ERROR
- * @note   温度精度 ±0.01°C，气压精度 1Pa，湿度精度 ~0.008%RH(×1024 时)
+ * @note   为旧接口保留，等待有 50ms 上限，仅推荐 x1 配置；裸机业务使用拆分接口。
+ *         编码分辨率不等于传感器测量准确度。
  */
 HAL_StatusTypeDef BME280_ReadAll(BME280_HandleTypeDef *bme,
                                  int32_t *temperature,
@@ -151,6 +153,10 @@ HAL_StatusTypeDef BME280_ReadAll(BME280_HandleTypeDef *bme,
  * @brief  软复位传感器
  */
 HAL_StatusTypeDef BME280_SoftReset(BME280_HandleTypeDef *bme);
+/* Split forced conversion: x1 caller waits >=10 ms; HAL_BUSY means not ready. */
+HAL_StatusTypeDef BME280_TriggerMeasurement(BME280_HandleTypeDef *bme);
+HAL_StatusTypeDef BME280_ReadMeasurement(BME280_HandleTypeDef *bme,
+    int32_t *temperature, uint32_t *pressure, uint32_t *humidity);
 
 /* ==================== 底层 I2C 操作 (如果 HAL 不同可替换) ==================== */
 HAL_StatusTypeDef BME280_WriteReg(BME280_HandleTypeDef *bme,

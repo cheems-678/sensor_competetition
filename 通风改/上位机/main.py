@@ -36,7 +36,11 @@ class LoRaProtocol:
     MSG_ERROR = 0x7E
 
     TELEMETRY_SIZE = 18
+    FLAG_MASTER_BME = 0x01
+    FLAG_DUAL_BME = 0x02
+    FLAG_SLAVE_ONLINE = 0x04
     SINGLE_GROUP = 1
+    FAN_CHANNELS = (1, 2)
 
     TEMPERATURE_INVALID = -32768
     UINT16_INVALID = 0xFFFF
@@ -111,7 +115,7 @@ class LoRaProtocol:
         elif msg_type == cls.MSG_SET_FAN_SPEED:
             valid = (
                 len(payload) == 2
-                and 1 <= payload[0] <= 4
+                and payload[0] in cls.FAN_CHANNELS
                 and payload[1] <= 100
             )
             direction = source == (cls.ROLE_CONTROL, 0) and target == (
@@ -178,8 +182,8 @@ class LoRaProtocol:
 
     @classmethod
     def cmd_set_fan_speed(cls, flow_id: int, channel: int, duty: int) -> bytes:
-        if not 1 <= channel <= 4:
-            raise ValueError("fan channel must be 1..4")
+        if channel not in cls.FAN_CHANNELS:
+            raise ValueError("fan channel must be 1 or 2")
         if not 0 <= duty <= 100:
             raise ValueError("fan duty must be 0..100")
         return cls.build_packet(
@@ -222,8 +226,9 @@ class LoRaProtocol:
         def u16(value: int):
             return None if value == cls.UINT16_INVALID else value
 
-        return {
+        decoded = {
             "flags": values[0],
+            # Legacy database names identify wire slots, not sensor ownership.
             "slave_temperature_c": temperature(values[1]),
             "slave_humidity_pct": humidity(values[2]),
             "slave_pressure_pa": None if values[3] == cls.UINT32_INVALID else values[3],
@@ -233,6 +238,29 @@ class LoRaProtocol:
             "master_temperature_c": temperature(values[7]),
             "master_humidity_pct": humidity(values[8]),
         }
+        dual_bme = decoded["flags"] in (0x03, 0x07)
+        master_bme = decoded["flags"] == cls.FLAG_MASTER_BME or dual_bme
+        decoded.update(
+            master_bme_temperature_c=decoded["slave_temperature_c"] if master_bme else None,
+            master_bme_humidity_pct=decoded["slave_humidity_pct"] if master_bme else None,
+            master_bme_pressure_pa=decoded["slave_pressure_pa"] if master_bme else None,
+            slave_bme_temperature_c=None,
+            slave_bme_humidity_pct=None,
+            slave_bme_pressure_pa=None,
+            slave_online=None,
+        )
+        if dual_bme:
+            slave_t, slave_h, slave_p = struct.unpack_from("<hHI", payload, 9)
+            online = bool(decoded["flags"] & cls.FLAG_SLAVE_ONLINE)
+            decoded.update(
+                slave_online=online,
+                slave_bme_temperature_c=temperature(slave_t) if online else None,
+                slave_bme_humidity_pct=humidity(slave_h) if online else None,
+                slave_bme_pressure_pa=slave_p if online and slave_p != cls.UINT32_INVALID else None,
+                sound_rms_1=None, sound_rms_2=None, rain_state=None,
+                master_temperature_c=None, master_humidity_pct=None,
+            )
+        return decoded
 
 
 class FrameStreamParser:
@@ -263,6 +291,7 @@ class FrameStreamParser:
 
 
 class TelemetryDatabase:
+    # Existing columns store wire slots; flags and raw_frame retain provenance.
     def __init__(self, path: str = "sensor_data.db"):
         self.connection = sqlite3.connect(path, check_same_thread=False)
         self.connection.execute(
@@ -326,22 +355,22 @@ class SerialEvent:
 
 
 class MonitorApp(tk.Tk):
-    FAN_PINS = ("PA1", "PB1", "PB9", "PB8")
+    FAN_PINS = {1: "PB1", 2: "PB8"}
     FAN_ACK_TIMEOUT_S = 8.0
+    TELEMETRY_POLL_INTERVAL_S = 1.0
+    TELEMETRY_TIMEOUT_S = 5.0
     FIELD_LABELS = (
-        ("slave_temperature_c", "从机 BME 温度", "℃"),
-        ("slave_humidity_pct", "从机 BME 湿度", "%RH"),
-        ("slave_pressure_pa", "从机 BME 气压", "Pa"),
-        ("sound_rms_1", "声学 RMS 1", ""),
-        ("sound_rms_2", "声学 RMS 2", ""),
-        ("rain_state", "雨滴状态", ""),
-        ("master_temperature_c", "主机 DHT11 温度", "℃"),
-        ("master_humidity_pct", "主机 DHT11 湿度", "%RH"),
+        ("master_bme_temperature_c", "主机 BME280 温度", "℃"),
+        ("slave_bme_temperature_c", "从机 BME280 温度", "℃"),
+        ("master_bme_humidity_pct", "主机 BME280 湿度", "%RH"),
+        ("slave_bme_humidity_pct", "从机 BME280 湿度", "%RH"),
+        ("master_bme_pressure_pa", "主机 BME280 绝对气压", "Pa"),
+        ("slave_bme_pressure_pa", "从机 BME280 绝对气压", "Pa"),
     )
 
     def __init__(self):
         super().__init__()
-        self.title("LoRa 通风监控 v4 — 单组")
+        self.title("LoRa 通风监控 v4 — 主从 BME280")
         self.geometry("820x650")
         self.serial_port = None
         self.reader_thread = None
@@ -351,9 +380,12 @@ class MonitorApp(tk.Tk):
         self.database = TelemetryDatabase()
         self.flow_id = 0
         self.value_vars = {name: tk.StringVar(value="--") for name, _, _ in self.FIELD_LABELS}
-        self.duty_vars = [tk.DoubleVar(value=0) for _ in range(4)]
-        self.fan_status_vars = [tk.StringVar(value="未发送") for _ in range(4)]
+        self.slave_link_var = tk.StringVar(value="从机链路：未知")
+        self.duty_vars = {channel: tk.DoubleVar(value=0) for channel in self.FAN_PINS}
+        self.fan_status_vars = {channel: tk.StringVar(value="未发送") for channel in self.FAN_PINS}
         self.fan_pending = {}
+        self.telemetry_pending = None
+        self.next_telemetry_poll_at = 0.0
         self._build_ui()
         self._refresh_ports()
         self.after(50, self._drain_events)
@@ -378,20 +410,24 @@ class MonitorApp(tk.Tk):
             if unit:
                 self.value_vars[name].set(f"-- {unit}")
 
-        fans = ttk.LabelFrame(self, text="四路风机 PWM（0–100%）")
+        ttk.Label(telemetry, textvariable=self.slave_link_var).grid(
+            row=3, column=0, columnspan=4, sticky="w", padx=8, pady=6)
+
+        fans = ttk.LabelFrame(self, text="两路风机 PWM（0–100%）")
         fans.pack(fill=tk.X, padx=12, pady=8)
-        for index, variable in enumerate(self.duty_vars, start=1):
-            ttk.Label(fans, text=f"风机 {index} / {self.FAN_PINS[index - 1]}").grid(row=index - 1, column=0, padx=8, pady=5)
+        for row, (channel, pin) in enumerate(self.FAN_PINS.items()):
+            variable = self.duty_vars[channel]
+            ttk.Label(fans, text=f"风机 {channel} / {pin}").grid(row=row, column=0, padx=8, pady=5)
             slider = ttk.Scale(fans, from_=0, to=100, variable=variable,
                                orient=tk.HORIZONTAL, length=300,
-                               command=lambda value, ch=index: self._preview_fan(ch, value))
-            slider.grid(row=index - 1, column=1)
-            slider.bind("<ButtonRelease-1>", lambda event, ch=index: self._set_fan(ch))
-            slider.bind("<KeyRelease-Left>", lambda event, ch=index: self._set_fan(ch))
-            slider.bind("<KeyRelease-Right>", lambda event, ch=index: self._set_fan(ch))
-            ttk.Spinbox(fans, from_=0, to=100, textvariable=variable, width=6).grid(row=index - 1, column=2, padx=8)
-            ttk.Button(fans, text="发送", command=lambda ch=index: self._set_fan(ch)).grid(row=index - 1, column=3, padx=8)
-            ttk.Label(fans, textvariable=self.fan_status_vars[index - 1], width=20).grid(row=index - 1, column=4, padx=6)
+                               command=lambda value, ch=channel: self._preview_fan(ch, value))
+            slider.grid(row=row, column=1)
+            slider.bind("<ButtonRelease-1>", lambda event, ch=channel: self._set_fan(ch))
+            slider.bind("<KeyRelease-Left>", lambda event, ch=channel: self._set_fan(ch))
+            slider.bind("<KeyRelease-Right>", lambda event, ch=channel: self._set_fan(ch))
+            ttk.Spinbox(fans, from_=0, to=100, textvariable=variable, width=6).grid(row=row, column=2, padx=8)
+            ttk.Button(fans, text="发送", command=lambda ch=channel: self._set_fan(ch)).grid(row=row, column=3, padx=8)
+            ttk.Label(fans, textvariable=self.fan_status_vars[channel], width=20).grid(row=row, column=4, padx=6)
 
         log_frame = ttk.LabelFrame(self, text="帧日志")
         log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
@@ -422,6 +458,9 @@ class MonitorApp(tk.Tk):
             messagebox.showerror("连接失败", str(exc))
             return
         self.stop_event.clear()
+        self.parser = FrameStreamParser()
+        self.telemetry_pending = None
+        self.next_telemetry_poll_at = time.monotonic() + self.TELEMETRY_POLL_INTERVAL_S
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
         self.connect_button.config(text="断开")
@@ -429,7 +468,10 @@ class MonitorApp(tk.Tk):
 
     def _disconnect(self):
         self.fan_pending.clear()
-        for status in self.fan_status_vars:
+        self.telemetry_pending = None
+        self.next_telemetry_poll_at = 0.0
+        self._clear_telemetry()
+        for status in self.fan_status_vars.values():
             status.set("已断开，状态未知")
         self.stop_event.set()
         port, self.serial_port = self.serial_port, None
@@ -461,8 +503,34 @@ class MonitorApp(tk.Tk):
         self._append_log("TX " + frame.hex(" ").upper())
         return True
 
-    def _request_telemetry(self):
-        self._send(LoRaProtocol.cmd_read_telemetry(self._next_flow(), True))
+    def _clear_telemetry(self):
+        for value in self.value_vars.values():
+            value.set("--")
+        self.slave_link_var.set("从机链路：未知")
+
+    def _request_telemetry(self, force_resample: bool = True):
+        if self.telemetry_pending is not None:
+            self._append_log("遥测请求等待应答，暂不重复发送")
+            return
+        flow = self._next_flow()
+        if self._send(LoRaProtocol.cmd_read_telemetry(flow, force_resample)):
+            now = time.monotonic()
+            self.telemetry_pending = (flow, now)
+            self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
+
+    def _poll_telemetry(self, now: float):
+        if self.serial_port is None:
+            return
+        if self.telemetry_pending is not None:
+            flow, sent_at = self.telemetry_pending
+            if now - sent_at >= self.TELEMETRY_TIMEOUT_S:
+                self.telemetry_pending = None
+                self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
+                self._clear_telemetry()
+                self._append_log(f"遥测应答超时 flow={flow}")
+            return
+        if not self.fan_pending and now >= self.next_telemetry_poll_at:
+            self._request_telemetry(False)
 
     @staticmethod
     def _normalize_fan_duty(value) -> int:
@@ -473,22 +541,25 @@ class MonitorApp(tk.Tk):
 
     def _preview_fan(self, channel: int, value):
         duty = self._normalize_fan_duty(value)
-        self.duty_vars[channel - 1].set(duty)
+        self.duty_vars[channel].set(duty)
 
     def _set_fan(self, channel: int):
+        if channel not in LoRaProtocol.FAN_CHANNELS:
+            messagebox.showwarning("通道已停用", "仅支持风机1/PB1、风机2/PB8")
+            return
         try:
-            duty = self._normalize_fan_duty(self.duty_vars[channel - 1].get())
+            duty = self._normalize_fan_duty(self.duty_vars[channel].get())
         except (ValueError, TypeError, tk.TclError):
             messagebox.showwarning("输入错误", "请输入 0–100 的占空比")
             return
-        self.duty_vars[channel - 1].set(duty)
+        self.duty_vars[channel].set(duty)
         flow = self._next_flow()
         if self._send(LoRaProtocol.cmd_set_fan_speed(flow, channel, duty)):
             # Newer settings supersede older confirmations for this channel.
             self.fan_pending = {key: item for key, item in self.fan_pending.items()
                                 if item[0] != channel}
             self.fan_pending[flow] = (channel, duty, time.monotonic())
-            self.fan_status_vars[channel - 1].set(f"等待确认 {duty}%")
+            self.fan_status_vars[channel].set(f"等待确认 {duty}%")
 
     def _drain_events(self):
         while True:
@@ -504,7 +575,8 @@ class MonitorApp(tk.Tk):
         for flow, (channel, duty, sent_at) in list(self.fan_pending.items()):
             if time.monotonic() - sent_at >= self.FAN_ACK_TIMEOUT_S:
                 del self.fan_pending[flow]
-                self.fan_status_vars[channel - 1].set(f"{duty}% 确认超时")
+                self.fan_status_vars[channel].set(f"{duty}% 确认超时")
+        self._poll_telemetry(time.monotonic())
         self.after(50, self._drain_events)
 
     def _handle_frame(self, frame: bytes):
@@ -515,7 +587,12 @@ class MonitorApp(tk.Tk):
             self._append_log("丢弃: " + str(exc))
             return
         if packet["type"] == LoRaProtocol.MSG_TELEMETRY:
+            if self.telemetry_pending is not None and self.telemetry_pending[0] == packet["flow_id"]:
+                self.telemetry_pending = None
             values = LoRaProtocol.decode_telemetry(packet["data"])
+            online = values["slave_online"]
+            self.slave_link_var.set("从机链路：" + (
+                "未知（旧布局）" if online is None else "在线" if online else "离线"))
             self.database.insert(packet["flow_id"], values, frame)
             for name, _, unit in self.FIELD_LABELS:
                 value = values[name]
@@ -527,12 +604,16 @@ class MonitorApp(tk.Tk):
                 if pending is not None:
                     channel, duty, _ = pending
                     text = f"已确认 {duty}%" if packet["data"][1] == 0 else "主机拒绝执行"
-                    self.fan_status_vars[channel - 1].set(text)
+                    self.fan_status_vars[channel].set(text)
         elif packet["type"] == LoRaProtocol.MSG_ERROR:
             self._append_log(f"ERROR code={packet['data'][0]}")
+            if self.telemetry_pending is not None and self.telemetry_pending[0] == packet["flow_id"]:
+                self.telemetry_pending = None
+                self.next_telemetry_poll_at = time.monotonic() + self.TELEMETRY_POLL_INTERVAL_S
+                self._clear_telemetry()
             pending = self.fan_pending.pop(packet["flow_id"], None)
             if pending is not None:
-                self.fan_status_vars[pending[0] - 1].set(f"失败 code={packet['data'][0]}")
+                self.fan_status_vars[pending[0]].set(f"失败 code={packet['data'][0]}")
 
     def _append_log(self, text: str):
         self.log.config(state=tk.NORMAL)

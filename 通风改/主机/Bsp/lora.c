@@ -6,6 +6,7 @@
 #include "master_queues.h"
 #include "master_identity.h"
 #include "master_ingress.h"
+#include "master_runtime.h"
 
 LoRaDiagnostics LoRaDiag = {0};
 uint16_t LORA_cntPre = 0;
@@ -258,6 +259,8 @@ void LoraP2PTX(void)
   LoRaMessage message;
   LoRaProtocolStatus status;
 
+  if (MasterRuntime_CanTransmit() == 0U) { return; }
+
   if (g_lora_tx_pending == 0U)
   {
     if (MasterQueues_ReceiveLoRa(&message) == 0U)
@@ -281,6 +284,15 @@ void LoraP2PTX(void)
    * 与已跑通的WGW链路保持相同的半双工保护：完整接收后至少等待50ms，
    * 再让同一个LoRa模块反向发送，避免模块仍处于接收/串口吐包阶段。
    */
+  /* A UART failure or long queue stall must not send an expired query later. */
+  if ((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) &&
+      (g_lora_tx_frame[6] == LORA_ROLE_SLAVE) &&
+      (MasterRuntime_IsSlaveQueryCurrent((uint16_t)(g_lora_tx_frame[8] |
+        ((uint16_t)g_lora_tx_frame[9] << 8U))) == 0U))
+  {
+    g_lora_tx_pending = 0U;
+    return;
+  }
   if ((uint32_t)(HAL_GetTick() - g_lora_last_rx_tick) <
       LORA_TURNAROUND_DELAY_MS)
   {
@@ -297,6 +309,13 @@ void LoraP2PTX(void)
     return;
   }
   g_lora_tx_pending = 0U;
+  if ((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) &&
+      (g_lora_tx_frame[6] == LORA_ROLE_SLAVE))
+  {
+    MasterRuntime_NotifySlaveRequestSent(
+      (uint16_t)(g_lora_tx_frame[8] | ((uint16_t)g_lora_tx_frame[9] << 8U)),
+      HAL_GetTick());
+  }
   LoRaDiag.tx_frame_count++;
 }
 

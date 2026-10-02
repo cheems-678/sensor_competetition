@@ -28,5 +28,9 @@ extern MasterRuntimeDiagnostics MasterRuntimeDiag;
 
 void MasterRuntime_Init(void);
 void MasterRuntime_ProcessOne(uint32_t now_ms);
+/* Half-duplex receive window starts only after the actual UART transmit. */
+void MasterRuntime_NotifySlaveRequestSent(uint16_t flow_id, uint32_t now_ms);
+uint8_t MasterRuntime_CanTransmit(void);
+uint8_t MasterRuntime_IsSlaveQueryCurrent(uint16_t flow_id);
 
 #endif /* MASTER_RUNTIME_H */

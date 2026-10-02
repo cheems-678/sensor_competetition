@@ -417,7 +417,9 @@ static uint8_t Gateway_PendingComplete(const GatewayMessage *message)
     {
         return (message->type == GATEWAY_TYPE_TELEMETRY) ? 1U : 0U;
     }
-    return (message->type == GATEWAY_TYPE_ACK) ? 1U : 0U;
+    return ((message->type == GATEWAY_TYPE_ACK) &&
+            (message->payload_length == 2U) &&
+            (message->payload[0] == g_pending.request_type)) ? 1U : 0U;
 }
 
 static void Gateway_HandleLoRa(const GatewayMessage *message)
@@ -552,7 +554,8 @@ void GatewayRuntime_Process(uint32_t now_ms)
         return;
     }
 
-    if (Gateway_DeadlineReached(now_ms, g_next_poll_tick))
+    if ((GATEWAY_AUTO_POLL_ENABLED != 0U) &&
+        Gateway_DeadlineReached(now_ms, g_next_poll_tick))
     {
         GatewayMessage poll;
 

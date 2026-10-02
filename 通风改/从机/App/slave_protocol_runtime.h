@@ -14,6 +14,9 @@ typedef struct
     volatile uint32_t ignored_message_count;
     volatile uint32_t duplicate_request_count;
     volatile uint32_t tx_failure_count;
+    volatile uint32_t request_count;
+    volatile uint32_t reply_count;
+    volatile uint32_t last_flow_id;
 } SlaveRuntimeDiagnostics;
 
 extern SlaveRuntimeDiagnostics SlaveRuntimeDiag;

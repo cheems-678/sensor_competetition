@@ -2,7 +2,6 @@
 
 #include <string.h>
 
-#include "master_dht11.h"
 #include "stm32f1xx_hal.h"
 
 #define WS2812_PIXEL_COUNT       (30U)
@@ -161,8 +160,10 @@ uint8_t Ws2812_SetSolid(uint8_t red, uint8_t green, uint8_t blue)
     DMA1->IFCR = DMA_IFCR_CGIF2;
     Ws2812_PinLow();
 
-    Ws2812Diag.last_timer_restore_ok = MasterDht11_ResumeTiming();
-    if (Ws2812Diag.last_timer_restore_ok == 0U)
+    Ws2812Diag.last_output_idle_ok =
+        ((TIM1->CR1 & TIM_CR1_CEN) == 0U) &&
+        (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13) == GPIO_PIN_RESET);
+    if (Ws2812Diag.last_output_idle_ok == 0U)
     {
         ok = 0U;
     }
