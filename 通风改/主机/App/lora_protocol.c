@@ -43,16 +43,30 @@ static LoRaProtocolStatus ValidateShape(const LoRaMessage *message)
             return LORA_PROTOCOL_INVALID_DIRECTION;
 
         case (uint8_t)LORA_MSG_TELEMETRY:
-            if (message->payload_length != LORA_PROTOCOL_TELEMETRY_SIZE)
+            if ((message->payload_length != LORA_PROTOCOL_TELEMETRY_SIZE) &&
+                (message->payload_length != LORA_PROTOCOL_LEGACY_TELEMETRY_SIZE))
             {
                 return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH;
             }
-            if (((message->source_role == (uint8_t)LORA_ROLE_SLAVE) &&
-                 (message->destination_role == (uint8_t)LORA_ROLE_MASTER)) ||
-                ((message->source_role == (uint8_t)LORA_ROLE_MASTER) &&
-                 (message->destination_role == (uint8_t)LORA_ROLE_CONTROL_ROOM)))
+            if ((message->source_role == (uint8_t)LORA_ROLE_SLAVE) &&
+                (message->destination_role == (uint8_t)LORA_ROLE_MASTER))
             {
-                return LORA_PROTOCOL_OK;
+                uint8_t expected_flags = (message->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE) ?
+                    LORA_TELEMETRY_FLAG_ACOUSTIC : 0U;
+                return (message->payload[0] == expected_flags) ?
+                    LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
+            }
+            if ((message->source_role == (uint8_t)LORA_ROLE_MASTER) &&
+                (message->destination_role == (uint8_t)LORA_ROLE_CONTROL_ROOM))
+            {
+                uint8_t flags = message->payload[0];
+                if (message->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE)
+                {
+                    return ((flags == 0x0BU) || (flags == 0x0FU)) ?
+                        LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
+                }
+                return ((flags == 0U) || (flags == 1U) || (flags == 3U) || (flags == 7U)) ?
+                    LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
             }
             return LORA_PROTOCOL_INVALID_DIRECTION;
 
@@ -70,13 +84,40 @@ static LoRaProtocolStatus ValidateShape(const LoRaMessage *message)
                     (message->destination_role == (uint8_t)LORA_ROLE_MASTER)) ?
                    LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_DIRECTION;
 
+        case (uint8_t)LORA_MSG_SET_WINDOW:
+            if (message->payload_length != 2U)
+            {
+                return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH;
+            }
+            if ((message->payload[0] != LORA_WINDOW_SERVO_ID) ||
+                (message->payload[1] > 1U))
+            {
+                return LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
+            }
+            return (((message->source_role == (uint8_t)LORA_ROLE_CONTROL_ROOM) &&
+                     (message->destination_role == (uint8_t)LORA_ROLE_MASTER)) ||
+                    ((message->source_role == (uint8_t)LORA_ROLE_MASTER) &&
+                     (message->destination_role == (uint8_t)LORA_ROLE_SLAVE))) ?
+                   LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_DIRECTION;
+
         case (uint8_t)LORA_MSG_ACK:
             if (message->payload_length != 2U)
             {
                 return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH;
             }
-            return ((message->source_role == (uint8_t)LORA_ROLE_MASTER) &&
-                    (message->destination_role == (uint8_t)LORA_ROLE_CONTROL_ROOM)) ?
+            if ((message->payload[0] == LORA_MSG_SET_WINDOW) &&
+                (message->payload[1] > LORA_WINDOW_STATUS_BUSY))
+            {
+                return LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
+            }
+            if ((message->source_role == (uint8_t)LORA_ROLE_MASTER) &&
+                (message->destination_role == (uint8_t)LORA_ROLE_CONTROL_ROOM))
+            {
+                return LORA_PROTOCOL_OK;
+            }
+            return ((message->source_role == (uint8_t)LORA_ROLE_SLAVE) &&
+                    (message->destination_role == (uint8_t)LORA_ROLE_MASTER) &&
+                    (message->payload[0] == LORA_MSG_SET_WINDOW)) ?
                    LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_DIRECTION;
 
         case (uint8_t)LORA_MSG_ERROR:
@@ -212,6 +253,10 @@ LoRaProtocolStatus LoRaProtocol_Decode(const uint8_t *frame,
         return LORA_PROTOCOL_INVALID_HEADER;
     }
     payload_length = frame[10];
+    if (payload_length > LORA_PROTOCOL_MAX_PAYLOAD_SIZE)
+    {
+        return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH;
+    }
     expected_length = (uint16_t)(LORA_PROTOCOL_MIN_FRAME_SIZE + payload_length);
     if (frame_length != expected_length)
     {

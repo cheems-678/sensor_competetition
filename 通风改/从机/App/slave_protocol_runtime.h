@@ -6,6 +6,7 @@
 #define SLAVE_TEMPERATURE_INVALID_X10        (-32767 - 1)
 #define SLAVE_HUMIDITY_INVALID_X10           (0xFFFFU)
 #define SLAVE_PRESSURE_INVALID_PA            (0xFFFFFFFFUL)
+#define SLAVE_SOUND_RMS_INVALID              (0xFFFFFFFFUL)
 
 typedef struct
 {

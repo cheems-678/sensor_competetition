@@ -32,15 +32,20 @@ class LoRaProtocol:
     MSG_READ_TELEMETRY = 0x01
     MSG_TELEMETRY = 0x02
     MSG_SET_FAN_SPEED = 0x10
+    MSG_SET_WINDOW = 0x11
     MSG_ACK = 0x20
     MSG_ERROR = 0x7E
 
-    TELEMETRY_SIZE = 18
+    LEGACY_TELEMETRY_SIZE = 18
+    TELEMETRY_SIZE = 26
     FLAG_MASTER_BME = 0x01
     FLAG_DUAL_BME = 0x02
     FLAG_SLAVE_ONLINE = 0x04
+    FLAG_ACOUSTIC_EXTENSION = 0x08
     SINGLE_GROUP = 1
     FAN_CHANNELS = (1, 2)
+    WINDOW_SERVO = 1
+    WINDOW_ACTIONS = (0, 1)
 
     TEMPERATURE_INVALID = -32768
     UINT16_INVALID = 0xFFFF
@@ -51,6 +56,7 @@ class LoRaProtocol:
         MSG_READ_TELEMETRY: "READ_TELEMETRY",
         MSG_TELEMETRY: "TELEMETRY",
         MSG_SET_FAN_SPEED: "SET_FAN_SPEED",
+        MSG_SET_WINDOW: "SET_WINDOW",
         MSG_ACK: "ACK",
         MSG_ERROR: "ERROR",
     }
@@ -107,7 +113,8 @@ class LoRaProtocol:
                 cls.SINGLE_GROUP,
             )
         elif msg_type == cls.MSG_TELEMETRY:
-            valid = len(payload) == cls.TELEMETRY_SIZE
+            cls._validate_telemetry_payload(payload)
+            valid = True
             direction = source == (cls.ROLE_MASTER, cls.SINGLE_GROUP) and target == (
                 cls.ROLE_CONTROL,
                 0,
@@ -122,8 +129,17 @@ class LoRaProtocol:
                 cls.ROLE_MASTER,
                 cls.SINGLE_GROUP,
             )
+        elif msg_type == cls.MSG_SET_WINDOW:
+            valid = (len(payload) == 2 and payload[0] == cls.WINDOW_SERVO
+                     and payload[1] in cls.WINDOW_ACTIONS)
+            direction = source == (cls.ROLE_CONTROL, 0) and target == (
+                cls.ROLE_MASTER,
+                cls.SINGLE_GROUP,
+            )
         elif msg_type == cls.MSG_ACK:
             valid = len(payload) == 2
+            if valid and payload[0] == cls.MSG_SET_WINDOW:
+                valid = payload[1] in (0, 1, 2, 3)
             direction = source == (cls.ROLE_MASTER, cls.SINGLE_GROUP) and target == (
                 cls.ROLE_CONTROL,
                 0,
@@ -197,7 +213,22 @@ class LoRaProtocol:
         )
 
     @classmethod
+    def cmd_set_window(cls, flow_id: int, action: int) -> bytes:
+        if type(action) is not int or action not in cls.WINDOW_ACTIONS:
+            raise ValueError("window action must be 0 (close) or 1 (open)")
+        return cls.build_packet(
+            cls.MSG_SET_WINDOW,
+            cls.ROLE_CONTROL,
+            0,
+            cls.ROLE_MASTER,
+            cls.SINGLE_GROUP,
+            flow_id,
+            bytes((cls.WINDOW_SERVO, action)),
+        )
+
+    @classmethod
     def placeholder_payload(cls) -> bytes:
+        """Return the historical 18-byte placeholder layout, not the extension."""
         return struct.pack(
             "<BhHIHHBhH",
             0,
@@ -212,10 +243,22 @@ class LoRaProtocol:
         )
 
     @classmethod
+    def _validate_telemetry_payload(cls, payload: bytes) -> None:
+        if len(payload) == cls.LEGACY_TELEMETRY_SIZE:
+            valid = payload[0] in (0x00, 0x01, 0x03, 0x07)
+        elif len(payload) == cls.TELEMETRY_SIZE:
+            valid = payload[0] in (0x0B, 0x0F)
+        else:
+            raise ValueError("invalid telemetry payload length")
+        if not valid:
+            raise ValueError("invalid telemetry payload layout")
+
+    @classmethod
     def decode_telemetry(cls, payload: bytes) -> dict:
-        if len(payload) != cls.TELEMETRY_SIZE:
-            raise ValueError(f"telemetry payload must be {cls.TELEMETRY_SIZE} bytes")
-        values = struct.unpack("<BhHIHHBhH", payload)
+        cls._validate_telemetry_payload(payload)
+        extended = len(payload) == cls.TELEMETRY_SIZE
+        # Decode the historical wire slots first; replace them for dual BME.
+        values = struct.unpack("<BhHIHHBhH", payload[:cls.LEGACY_TELEMETRY_SIZE])
 
         def temperature(value: int):
             return None if value == cls.TEMPERATURE_INVALID else value / 10.0
@@ -238,7 +281,7 @@ class LoRaProtocol:
             "master_temperature_c": temperature(values[7]),
             "master_humidity_pct": humidity(values[8]),
         }
-        dual_bme = decoded["flags"] in (0x03, 0x07)
+        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F)
         master_bme = decoded["flags"] == cls.FLAG_MASTER_BME or dual_bme
         decoded.update(
             master_bme_temperature_c=decoded["slave_temperature_c"] if master_bme else None,
@@ -260,6 +303,12 @@ class LoRaProtocol:
                 sound_rms_1=None, sound_rms_2=None, rain_state=None,
                 master_temperature_c=None, master_humidity_pct=None,
             )
+            if extended and online:
+                sound_left, sound_right = struct.unpack_from("<II", payload, 18)
+                decoded.update(
+                    sound_rms_1=None if sound_left == cls.UINT32_INVALID else sound_left,
+                    sound_rms_2=None if sound_right == cls.UINT32_INVALID else sound_right,
+                )
         return decoded
 
 
@@ -357,6 +406,7 @@ class SerialEvent:
 class MonitorApp(tk.Tk):
     FAN_PINS = {1: "PB1", 2: "PB8"}
     FAN_ACK_TIMEOUT_S = 8.0
+    WINDOW_ACK_TIMEOUT_S = 8.0
     TELEMETRY_POLL_INTERVAL_S = 1.0
     TELEMETRY_TIMEOUT_S = 5.0
     FIELD_LABELS = (
@@ -367,11 +417,15 @@ class MonitorApp(tk.Tk):
         ("master_bme_pressure_pa", "主机 BME280 绝对气压", "Pa"),
         ("slave_bme_pressure_pa", "从机 BME280 绝对气压", "Pa"),
     )
+    SOUND_LABELS = (
+        ("sound_rms_1", "声音1 / 左声道（SEL 接 GND）"),
+        ("sound_rms_2", "声音2 / 右声道（SEL 接 3V3）"),
+    )
 
     def __init__(self):
         super().__init__()
-        self.title("LoRa 通风监控 v4 — 主从 BME280")
-        self.geometry("820x650")
+        self.title("LoRa 通风监控 v4 — 主从 BME280 / 双声学 / 窗户测试")
+        self.geometry("850x850")
         self.serial_port = None
         self.reader_thread = None
         self.stop_event = threading.Event()
@@ -380,11 +434,18 @@ class MonitorApp(tk.Tk):
         self.database = TelemetryDatabase()
         self.flow_id = 0
         self.value_vars = {name: tk.StringVar(value="--") for name, _, _ in self.FIELD_LABELS}
+        self.sound_vars = {name: tk.StringVar(value="--") for name, _ in self.SOUND_LABELS}
         self.slave_link_var = tk.StringVar(value="从机链路：未知")
+        self.last_telemetry_at = None
         self.duty_vars = {channel: tk.DoubleVar(value=0) for channel in self.FAN_PINS}
         self.fan_status_vars = {channel: tk.StringVar(value="未发送") for channel in self.FAN_PINS}
         self.fan_pending = {}
         self.telemetry_pending = None
+        self.window_queued_action = None
+        self.window_pending = None
+        self.window_status_var = tk.StringVar(value="未连接，位置未知")
+        self.window_buttons = {}
+        self.fan_send_buttons = {}
         self.next_telemetry_poll_at = 0.0
         self._build_ui()
         self._refresh_ports()
@@ -400,7 +461,8 @@ class MonitorApp(tk.Tk):
         ttk.Button(connection, text="刷新", command=self._refresh_ports).pack(side=tk.LEFT)
         self.connect_button = ttk.Button(connection, text="连接", command=self._toggle_connection)
         self.connect_button.pack(side=tk.LEFT, padx=6)
-        ttk.Button(connection, text="读取单帧", command=self._request_telemetry).pack(side=tk.RIGHT, padx=6)
+        self.telemetry_button = ttk.Button(connection, text="读取单帧", command=self._request_telemetry)
+        self.telemetry_button.pack(side=tk.RIGHT, padx=6)
 
         telemetry = ttk.LabelFrame(self, text="单组遥测（占位值显示为 --）")
         telemetry.pack(fill=tk.X, padx=12, pady=8)
@@ -412,6 +474,15 @@ class MonitorApp(tk.Tk):
 
         ttk.Label(telemetry, textvariable=self.slave_link_var).grid(
             row=3, column=0, columnspan=4, sticky="w", padx=8, pady=6)
+
+        acoustic = ttk.LabelFrame(self, text="从机声学 — 最近1秒短窗 RMS 最大值")
+        acoustic.pack(fill=tk.X, padx=12, pady=8)
+        for column, (name, label) in enumerate(self.SOUND_LABELS):
+            ttk.Label(acoustic, text=label).grid(row=0, column=column * 2, sticky="w", padx=8, pady=6)
+            ttk.Label(acoustic, textvariable=self.sound_vars[name], width=14,
+                      font=("TkDefaultFont", 13)).grid(row=0, column=column * 2 + 1, sticky="w", padx=8)
+        ttk.Label(acoustic, text="单位：18位 PCM 计数，不是分贝；无有效数据显示 --").grid(
+            row=1, column=0, columnspan=4, sticky="w", padx=8, pady=6)
 
         fans = ttk.LabelFrame(self, text="两路风机 PWM（0–100%）")
         fans.pack(fill=tk.X, padx=12, pady=8)
@@ -426,8 +497,26 @@ class MonitorApp(tk.Tk):
             slider.bind("<KeyRelease-Left>", lambda event, ch=channel: self._set_fan(ch))
             slider.bind("<KeyRelease-Right>", lambda event, ch=channel: self._set_fan(ch))
             ttk.Spinbox(fans, from_=0, to=100, textvariable=variable, width=6).grid(row=row, column=2, padx=8)
-            ttk.Button(fans, text="发送", command=lambda ch=channel: self._set_fan(ch)).grid(row=row, column=3, padx=8)
+            button = ttk.Button(fans, text="发送", command=lambda ch=channel: self._set_fan(ch))
+            button.grid(row=row, column=3, padx=8)
+            self.fan_send_buttons[channel] = button
             ttk.Label(fans, textvariable=self.fan_status_vars[channel], width=20).grid(row=row, column=4, padx=6)
+
+        window = ttk.LabelFrame(self, text="从机 PB8 / SG90 360°连续旋转空载测试")
+        window.pack(fill=tk.X, padx=12, pady=8)
+        for column, (action, label) in enumerate(((1, "打开窗户"), (0, "关闭窗户"))):
+            button = ttk.Button(window, text=label, command=lambda value=action: self._set_window(value))
+            button.grid(row=0, column=column, padx=8, pady=8)
+            self.window_buttons[action] = button
+        ttk.Label(window, textvariable=self.window_status_var, wraplength=460).grid(
+            row=0, column=2, sticky="w", padx=8)
+        ttk.Label(window, text="开窗 1700 μs / 关窗 1300 μs，各运行 300 ms 后设置 1500 μs 停止脉宽（需空载校准）",
+                  wraplength=760).grid(
+            row=1, column=0, columnspan=3, sticky="w", padx=8, pady=6)
+        ttk.Label(window, text="ACK 仅确认动作启动 PWM，不表示动作完成、自动停止成功或机械到位",
+                  wraplength=760).grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=8, pady=6)
+        self._sync_window_buttons()
 
         log_frame = ttk.LabelFrame(self, text="帧日志")
         log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
@@ -460,13 +549,25 @@ class MonitorApp(tk.Tk):
         self.stop_event.clear()
         self.parser = FrameStreamParser()
         self.telemetry_pending = None
+        self.window_queued_action = None
+        self.window_pending = None
+        self.window_status_var.set("已连接，尚未发送，位置未知")
         self.next_telemetry_poll_at = time.monotonic() + self.TELEMETRY_POLL_INTERVAL_S
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
         self.connect_button.config(text="断开")
+        self._sync_window_buttons()
         self._append_log(f"已连接 {self.port_var.get()}")
 
     def _disconnect(self):
+        if self.window_pending is not None:
+            self.window_status_var.set("已断开，执行结果未知")
+        elif self.window_queued_action is not None:
+            self.window_status_var.set("已断开，待发动作已取消")
+        elif self.serial_port is not None:
+            self.window_status_var.set("已断开，位置未知")
+        self.window_queued_action = None
+        self.window_pending = None
         self.fan_pending.clear()
         self.telemetry_pending = None
         self.next_telemetry_poll_at = 0.0
@@ -478,6 +579,7 @@ class MonitorApp(tk.Tk):
         if port is not None:
             port.close()
         self.connect_button.config(text="连接")
+        self._sync_window_buttons()
 
     def _reader(self):
         while not self.stop_event.is_set() and self.serial_port is not None:
@@ -506,9 +608,15 @@ class MonitorApp(tk.Tk):
     def _clear_telemetry(self):
         for value in self.value_vars.values():
             value.set("--")
+        for value in self.sound_vars.values():
+            value.set("--")
         self.slave_link_var.set("从机链路：未知")
+        self.last_telemetry_at = None
 
     def _request_telemetry(self, force_resample: bool = True):
+        if self._window_busy():
+            self._append_log("窗户命令等待完成，暂停新增遥测请求")
+            return
         if self.telemetry_pending is not None:
             self._append_log("遥测请求等待应答，暂不重复发送")
             return
@@ -529,8 +637,68 @@ class MonitorApp(tk.Tk):
                 self._clear_telemetry()
                 self._append_log(f"遥测应答超时 flow={flow}")
             return
-        if not self.fan_pending and now >= self.next_telemetry_poll_at:
+        if not self._window_busy() and not self.fan_pending and now >= self.next_telemetry_poll_at:
             self._request_telemetry(False)
+
+    def _window_busy(self) -> bool:
+        # Close is action 0; truthiness must not drop a queued close command.
+        return self.window_queued_action is not None or self.window_pending is not None
+
+    def _sync_window_buttons(self):
+        busy = self._window_busy()
+        for button in self.window_buttons.values():
+            button.state(["!disabled" if self.serial_port is not None and not busy else "disabled"])
+        for button in (*self.fan_send_buttons.values(), self.telemetry_button):
+            button.state(["disabled" if busy else "!disabled"])
+
+    @staticmethod
+    def _window_action_text(action: int) -> str:
+        return "开窗" if action == 1 else "关窗"
+
+    def _set_window(self, action: int):
+        if type(action) is not int or action not in LoRaProtocol.WINDOW_ACTIONS:
+            raise ValueError("window action must be 0 or 1")
+        if self.serial_port is None:
+            self.window_status_var.set("未连接，未发送")
+            self._sync_window_buttons()
+            return
+        if self._window_busy():
+            self._append_log("窗户命令等待完成，不重复发送")
+            return
+        self.window_queued_action = action
+        self.window_status_var.set(f"{self._window_action_text(action)}等待前序请求")
+        self._sync_window_buttons()
+        self._service_window(time.monotonic())
+
+    def _finish_window(self, text: str, now: float):
+        self.window_pending = None
+        self.window_status_var.set(text)
+        self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
+        self._sync_window_buttons()
+
+    def _expire_window(self, now: float) -> bool:
+        if self.window_pending is None or now - self.window_pending[2] < self.WINDOW_ACK_TIMEOUT_S:
+            return False
+        flow, action, _ = self.window_pending
+        self._finish_window(f"{self._window_action_text(action)}确认超时，结果未知", now)
+        self._append_log(f"窗户确认超时 flow={flow}；不自动重试")
+        return True
+
+    def _service_window(self, now: float):
+        self._expire_window(now)
+        if (self.serial_port is None or self.window_pending is not None
+                or self.window_queued_action is None or self.telemetry_pending is not None
+                or self.fan_pending):
+            return
+        action, self.window_queued_action = self.window_queued_action, None
+        flow = self._next_flow()
+        if self._send(LoRaProtocol.cmd_set_window(flow, action)):
+            # Start the deadline only after the complete UART write, not at button click.
+            self.window_pending = (flow, action, time.monotonic())
+            self.window_status_var.set(f"{self._window_action_text(action)}等待确认")
+        else:
+            self.window_status_var.set(f"{self._window_action_text(action)}发送失败，结果未知")
+        self._sync_window_buttons()
 
     @staticmethod
     def _normalize_fan_duty(value) -> int:
@@ -544,6 +712,9 @@ class MonitorApp(tk.Tk):
         self.duty_vars[channel].set(duty)
 
     def _set_fan(self, channel: int):
+        if self._window_busy():
+            self._append_log("窗户命令等待完成，暂停新增风机请求")
+            return
         if channel not in LoRaProtocol.FAN_CHANNELS:
             messagebox.showwarning("通道已停用", "仅支持风机1/PB1、风机2/PB8")
             return
@@ -576,7 +747,9 @@ class MonitorApp(tk.Tk):
             if time.monotonic() - sent_at >= self.FAN_ACK_TIMEOUT_S:
                 del self.fan_pending[flow]
                 self.fan_status_vars[channel].set(f"{duty}% 确认超时")
-        self._poll_telemetry(time.monotonic())
+        now = time.monotonic()
+        self._poll_telemetry(now)
+        self._service_window(now)
         self.after(50, self._drain_events)
 
     def _handle_frame(self, frame: bytes):
@@ -587,19 +760,46 @@ class MonitorApp(tk.Tk):
             self._append_log("丢弃: " + str(exc))
             return
         if packet["type"] == LoRaProtocol.MSG_TELEMETRY:
-            if self.telemetry_pending is not None and self.telemetry_pending[0] == packet["flow_id"]:
+            if self.telemetry_pending is None or self.telemetry_pending[0] != packet["flow_id"]:
+                return
+            now = time.monotonic()
+            if now - self.telemetry_pending[1] >= self.TELEMETRY_TIMEOUT_S:
+                # The event drain runs before polling: enforce the deadline here too.
                 self.telemetry_pending = None
+                self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
+                self._clear_telemetry()
+                return
+            self.telemetry_pending = None
             values = LoRaProtocol.decode_telemetry(packet["data"])
             online = values["slave_online"]
             self.slave_link_var.set("从机链路：" + (
                 "未知（旧布局）" if online is None else "在线" if online else "离线"))
             self.database.insert(packet["flow_id"], values, frame)
+            self.last_telemetry_at = now
             for name, _, unit in self.FIELD_LABELS:
                 value = values[name]
                 self.value_vars[name].set("--" if value is None else f"{value:g}{(' ' + unit) if unit else ''}")
+            # Only the 26-byte layout carries current stereo acoustic statistics.
+            for name, _ in self.SOUND_LABELS:
+                value = values[name] if len(packet["data"]) == LoRaProtocol.TELEMETRY_SIZE else None
+                self.sound_vars[name].set("--" if value is None else str(value))
         elif packet["type"] == LoRaProtocol.MSG_ACK:
             self._append_log(f"ACK command=0x{packet['data'][0]:02X} status={packet['data'][1]}")
-            if packet["data"][0] == LoRaProtocol.MSG_SET_FAN_SPEED:
+            if packet["data"][0] == LoRaProtocol.MSG_SET_WINDOW:
+                if self.window_pending is None or self.window_pending[0] != packet["flow_id"]:
+                    return
+                now = time.monotonic()
+                if self._expire_window(now):
+                    return
+                action = self._window_action_text(self.window_pending[1])
+                messages = {
+                    0: f"{action}启动PWM已确认（完成/停止状态未知）",
+                    1: f"{action}失败：舵机驱动故障",
+                    2: f"{action}确认超时，结果未知",
+                    3: f"{action}未执行：主机忙",
+                }
+                self._finish_window(messages[packet["data"][1]], now)
+            elif packet["data"][0] == LoRaProtocol.MSG_SET_FAN_SPEED:
                 pending = self.fan_pending.pop(packet["flow_id"], None)
                 if pending is not None:
                     channel, duty, _ = pending
@@ -607,6 +807,11 @@ class MonitorApp(tk.Tk):
                     self.fan_status_vars[channel].set(text)
         elif packet["type"] == LoRaProtocol.MSG_ERROR:
             self._append_log(f"ERROR code={packet['data'][0]}")
+            if self.window_pending is not None and self.window_pending[0] == packet["flow_id"]:
+                now = time.monotonic()
+                if not self._expire_window(now):
+                    action = self._window_action_text(self.window_pending[1])
+                    self._finish_window(f"{action}错误 code={packet['data'][0]}，结果未知", now)
             if self.telemetry_pending is not None and self.telemetry_pending[0] == packet["flow_id"]:
                 self.telemetry_pending = None
                 self.next_telemetry_poll_at = time.monotonic() + self.TELEMETRY_POLL_INTERVAL_S

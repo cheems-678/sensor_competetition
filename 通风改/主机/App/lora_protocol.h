@@ -10,18 +10,25 @@
 #define LORA_PROTOCOL_MIN_FRAME_SIZE        (13U)
 #define LORA_PROTOCOL_MAX_FRAME_SIZE        (141U)
 
-#define LORA_PROTOCOL_TELEMETRY_SIZE        (18U)
+#define LORA_PROTOCOL_TELEMETRY_SIZE        (26U)
+#define LORA_PROTOCOL_LEGACY_TELEMETRY_SIZE (18U)
 #define LORA_PROTOCOL_SINGLE_GROUP          (1U)
+#define LORA_WINDOW_SERVO_ID                (1U)
+#define LORA_WINDOW_STATUS_OK               (0U)
+#define LORA_WINDOW_STATUS_DRIVER_ERROR     (1U)
+#define LORA_WINDOW_STATUS_TIMEOUT          (2U)
+#define LORA_WINDOW_STATUS_BUSY             (3U)
 #define LORA_PROTOCOL_TEMPERATURE_INVALID   (-32767 - 1)
 #define LORA_PROTOCOL_HUMIDITY_INVALID      (0xFFFFU)
 #define LORA_PROTOCOL_PRESSURE_INVALID      (0xFFFFFFFFUL)
-#define LORA_PROTOCOL_SOUND_INVALID         (0xFFFFU)
+#define LORA_PROTOCOL_SOUND_INVALID         (0xFFFFFFFFUL)
 
-/* v4/18 bytes: flags 0=legacy, 1=master-only, 3/7=dual BME offline/online.
-   Historical slot names remain below for compatibility; dual remote is 9..16. */
+/* v4/26 bytes: flags 8=slave, B/F=dual BME + acoustic offline/online.
+   Legacy v4/18 bytes remain accepted; remote BME is always 9..16. */
 #define LORA_TELEMETRY_FLAG_MASTER_BME       (0x01U)
 #define LORA_TELEMETRY_FLAG_DUAL_BME         (0x02U)
 #define LORA_TELEMETRY_FLAG_SLAVE_ONLINE     (0x04U)
+#define LORA_TELEMETRY_FLAG_ACOUSTIC         (0x08U)
 #define LORA_TELEMETRY_REMOTE_BME_TEMP_OFFSET (9U)
 #define LORA_TELEMETRY_REMOTE_BME_HUM_OFFSET  (11U)
 #define LORA_TELEMETRY_REMOTE_BME_PRESSURE_OFFSET (13U)
@@ -29,9 +36,9 @@
 #define LORA_TELEMETRY_SLAVE_TEMP_OFFSET     (1U)
 #define LORA_TELEMETRY_SLAVE_HUM_OFFSET      (3U)
 #define LORA_TELEMETRY_SLAVE_PRESSURE_OFFSET (5U)
-#define LORA_TELEMETRY_SOUND_1_OFFSET        (9U)
-#define LORA_TELEMETRY_SOUND_2_OFFSET        (11U)
-#define LORA_TELEMETRY_RAIN_OFFSET           (13U)
+#define LORA_TELEMETRY_SOUND_1_OFFSET        (18U)
+#define LORA_TELEMETRY_SOUND_2_OFFSET        (22U)
+#define LORA_TELEMETRY_RAIN_OFFSET           (17U)
 #define LORA_TELEMETRY_MASTER_TEMP_OFFSET    (14U)
 #define LORA_TELEMETRY_MASTER_HUM_OFFSET     (16U)
 #define LORA_TELEMETRY_BME_TEMP_OFFSET       LORA_TELEMETRY_SLAVE_TEMP_OFFSET
@@ -50,6 +57,7 @@ typedef enum
     LORA_MSG_READ_TELEMETRY = 0x01,
     LORA_MSG_TELEMETRY      = 0x02,
     LORA_MSG_SET_FAN_SPEED  = 0x10,
+    LORA_MSG_SET_WINDOW     = 0x11,
     LORA_MSG_ACK            = 0x20,
     LORA_MSG_ERROR          = 0x7E
 } LoRaMessageType;

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* 当前只联调控制室与主机风扇；从机未供电，不自动轮询遥测。设为 1 恢复轮询。 */
+/* 上位机负责遥测轮询；控制室只转发遥测、风机及窗口命令。 */
 #define GATEWAY_AUTO_POLL_ENABLED (0U)
 
 /*

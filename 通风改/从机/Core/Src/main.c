@@ -1,5 +1,14 @@
+#ifndef SLAVE_SG90_STANDALONE_TEST
+#define SLAVE_SG90_STANDALONE_TEST 0
+#endif
+
 #include "main.h"
 #include "tim.h"
+
+#if SLAVE_SG90_STANDALONE_TEST
+#include "sg90_test_pwm.h"
+#include "sg90_standalone_test.h"
+#else
 #include "usart.h"
 #include "gpio.h"
 
@@ -7,6 +16,9 @@
 #include "core_delay.h"
 #include "interrupt.h"
 #include "lora.h"
+#include "slave_acoustic.h"
+#include "slave_servo_test.h"
+#endif
 
 void SystemClock_Config(void);
 
@@ -15,25 +27,45 @@ int main(void)
     HAL_Init();
     SystemClock_Config();
 
+#if SLAVE_SG90_STANDALONE_TEST
+    /* Standalone bench firmware: no radio, sensors, UART or host control. */
+    MX_TIM4_Init();
+    if (Sg90TestPwm_Start(SG90_TEST_CENTER_US) == 0U)
+    {
+        Error_Handler();
+    }
+    for (;;)
+    {
+        if (Sg90StandaloneTest_RunCycle() == 0U)
+        {
+            Error_Handler();
+        }
+    }
+#else
     MX_GPIO_Init();
     MX_TIM4_Init();
     MX_TIM2_Init();
     MX_USART1_UART_Init();
     MX_USART2_UART_Init();
 
-    HAL_TIM_Base_Start_IT(&htim4);
     HAL_UART_Receive_IT(&huart2, &rx2_data, 1U);
 
     HAL_Delay(50U);
     LORA_Init();
     led2_on;
     CPU_TS_TmrInit();
+    SlaveAcoustic_Init(HAL_GetTick());
+    SlaveServoTest_InitManual(HAL_GetTick());
 
     for (;;)
     {
-        /* Bare-metal BME sampling and bounded LoRa request/reply service. */
+        /* DMA runs independently; drain before and after potentially slow I2C/UART. */
+        SlaveAcoustic_Process(HAL_GetTick());
+        SlaveServoTest_Process(HAL_GetTick());
         LoraP2PTrans();
+        SlaveAcoustic_Process(HAL_GetTick());
     }
+#endif
 }
 
 void SystemClock_Config(void)

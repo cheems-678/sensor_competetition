@@ -14,6 +14,7 @@
 #include "stm32f1xx_hal.h"
 
 #define MASTER_ERROR_BUSY          (1U)
+#define MASTER_SLAVE_AUDIO_MAX_AGE_MS (300UL)
 
 MasterRuntimeDiagnostics MasterRuntimeDiag;
 
@@ -24,13 +25,18 @@ typedef struct
     uint32_t slave_start_tick;
     uint16_t slave_flow_id;
     uint8_t slave_state; /* 0=waiting to queue, 1=queued, 2=RX window, 3=done */
+    uint8_t request_type;
     uint8_t force_sample;
+    uint8_t window_action;
+    uint8_t window_status;
     uint8_t slave_online;
     uint8_t slave_data[8];
+    uint8_t slave_audio[8];
+    uint32_t slave_audio_received_tick;
     uint8_t active;
-} PendingTelemetry;
+} PendingSlaveRequest;
 
-static PendingTelemetry g_pending;
+static PendingSlaveRequest g_pending;
 static MasterEvent g_event;
 static uint16_t g_slave_flow;
 
@@ -81,7 +87,7 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
 
     memset(payload, 0, LORA_PROTOCOL_TELEMETRY_SIZE);
     payload[LORA_TELEMETRY_FLAGS_OFFSET] = LORA_TELEMETRY_FLAG_MASTER_BME |
-        LORA_TELEMETRY_FLAG_DUAL_BME;
+        LORA_TELEMETRY_FLAG_DUAL_BME | LORA_TELEMETRY_FLAG_ACOUSTIC;
     MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_BME_TEMP_OFFSET],
                            (uint16_t)LORA_PROTOCOL_TEMPERATURE_INVALID);
     MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_BME_HUM_OFFSET],
@@ -91,9 +97,16 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
     memcpy(&payload[LORA_TELEMETRY_REMOTE_BME_TEMP_OFFSET],
            g_pending.slave_data, sizeof(g_pending.slave_data));
     payload[17] = 0xFFU;
+    memset(&payload[LORA_TELEMETRY_SOUND_1_OFFSET], 0xFF, 8U);
     if (g_pending.slave_online != 0U)
     {
         payload[0] |= LORA_TELEMETRY_FLAG_SLAVE_ONLINE;
+        if ((uint32_t)(now_ms - g_pending.slave_audio_received_tick) <
+            MASTER_SLAVE_AUDIO_MAX_AGE_MS)
+        {
+            memcpy(&payload[LORA_TELEMETRY_SOUND_1_OFFSET],
+                   g_pending.slave_audio, sizeof(g_pending.slave_audio));
+        }
     }
 
     if (MasterBme280_GetSample(now_ms, &sample) != 0U)
@@ -134,6 +147,23 @@ static uint8_t MasterRuntime_QueueTelemetry(uint16_t flow_id, uint32_t now_ms)
     return 1U;
 }
 
+static uint8_t MasterRuntime_QueueWindowAck(uint16_t flow_id, uint8_t status)
+{
+    LoRaMessage outbound;
+
+    MasterRuntime_SetAddress(&outbound, LORA_MSG_ACK,
+                             LORA_ROLE_CONTROL_ROOM, 0U, flow_id);
+    outbound.payload_length = 2U;
+    outbound.payload[0] = LORA_MSG_SET_WINDOW;
+    outbound.payload[1] = status;
+    if (MasterRuntime_Queue(&outbound) == 0U)
+    {
+        return 0U;
+    }
+    MasterRuntimeDiag.window_reply_count++;
+    return 1U;
+}
+
 static void MasterRuntime_HandleControl(const LoRaMessage *message,
                                         uint32_t now_ms)
 {
@@ -150,6 +180,7 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         }
         memset(&g_pending, 0, sizeof(g_pending));
         g_pending.active = 1U;
+        g_pending.request_type = LORA_MSG_READ_TELEMETRY;
         g_pending.flow_id = message->flow_id;
         g_pending.slave_flow_id = ++g_slave_flow;
         g_pending.force_sample = message->payload[0];
@@ -157,9 +188,39 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         MasterRuntime_WriteU16(&g_pending.slave_data[0], 0x8000U);
         MasterRuntime_WriteU16(&g_pending.slave_data[2], 0xFFFFU);
         MasterRuntime_WriteU32(&g_pending.slave_data[4], 0xFFFFFFFFUL);
+        memset(g_pending.slave_audio, 0xFF, sizeof(g_pending.slave_audio));
         g_pending.sample_generation = MasterBme280Diag.completed_count;
         MasterRuntimeDiag.last_request_flow_id = message->flow_id;
         if (g_pending.force_sample != 0U) { MasterBme280_RequestSample(now_ms); }
+        return;
+    }
+
+    if (message->type == LORA_MSG_SET_WINDOW)
+    {
+        /* The wire decoder validates this too; never act on a malformed event. */
+        if ((message->payload_length != 2U) ||
+            (message->payload[0] != LORA_WINDOW_SERVO_ID) ||
+            (message->payload[1] > 1U))
+        {
+            return;
+        }
+        MasterRuntimeDiag.window_command_count++;
+        if (g_pending.active != 0U)
+        {
+            MasterRuntimeDiag.window_busy_count++;
+            (void)MasterRuntime_QueueWindowAck(message->flow_id,
+                                              LORA_WINDOW_STATUS_BUSY);
+            return;
+        }
+        memset(&g_pending, 0, sizeof(g_pending));
+        g_pending.active = 1U;
+        g_pending.request_type = LORA_MSG_SET_WINDOW;
+        g_pending.flow_id = message->flow_id;
+        g_pending.slave_flow_id = ++g_slave_flow;
+        g_pending.slave_start_tick = now_ms;
+        g_pending.window_action = message->payload[1];
+        g_pending.window_status = LORA_WINDOW_STATUS_TIMEOUT;
+        /* Opening (action=1) must not trigger a forced BME conversion. */
         return;
     }
 
@@ -177,6 +238,60 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         outbound.payload[1] = (applied != 0U) ? 0U : 1U;
         (void)MasterRuntime_Queue(&outbound);
     }
+}
+
+static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
+                                      uint32_t now_ms, uint32_t received_tick)
+{
+    uint8_t in_window = ((g_pending.active != 0U) &&
+        (g_pending.slave_state == 2U) &&
+        ((uint32_t)(now_ms - g_pending.slave_start_tick) <
+         MASTER_SLAVE_RESPONSE_TIMEOUT_MS) &&
+        (slave->flow_id == g_pending.slave_flow_id)) ? 1U : 0U;
+
+    if (g_pending.request_type == LORA_MSG_SET_WINDOW)
+    {
+        if ((in_window != 0U) && (slave->type == LORA_MSG_ACK) &&
+            (slave->payload_length == 2U) &&
+            (slave->payload[0] == LORA_MSG_SET_WINDOW) &&
+            (slave->payload[1] <= LORA_WINDOW_STATUS_BUSY))
+        {
+            g_pending.window_status = slave->payload[1];
+            g_pending.slave_state = 3U;
+            MasterRuntimeDiag.window_response_match_count++;
+        }
+        else
+        {
+            MasterRuntimeDiag.window_response_unmatched_count++;
+        }
+        return;
+    }
+
+    if ((in_window != 0U) &&
+        (g_pending.request_type == LORA_MSG_READ_TELEMETRY) &&
+        (slave->type == LORA_MSG_TELEMETRY) &&
+        (((slave->payload_length == LORA_PROTOCOL_LEGACY_TELEMETRY_SIZE) &&
+          (slave->payload[0] == 0U)) ||
+         ((slave->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE) &&
+          (slave->payload[0] == LORA_TELEMETRY_FLAG_ACOUSTIC))))
+    {
+        uint32_t elapsed = now_ms - g_pending.slave_start_tick;
+        memcpy(g_pending.slave_data, &slave->payload[1], 8U);
+        if (slave->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE)
+        {
+            memcpy(g_pending.slave_audio,
+                   &slave->payload[LORA_TELEMETRY_SOUND_1_OFFSET], 8U);
+        }
+        g_pending.slave_audio_received_tick = received_tick;
+        g_pending.slave_online = 1U;
+        g_pending.slave_state = 3U;
+        MasterRuntimeDiag.slave_response_match_count++;
+        MasterRuntimeDiag.last_slave_flow_id = slave->flow_id;
+        MasterRuntimeDiag.last_slave_response_ms = elapsed;
+        if (elapsed > MasterRuntimeDiag.max_slave_response_ms)
+        { MasterRuntimeDiag.max_slave_response_ms = elapsed; }
+    }
+    else { MasterRuntimeDiag.slave_response_unmatched_count++; }
 }
 
 void MasterRuntime_Init(void)
@@ -210,25 +325,8 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
             else if (route == MASTER_INGRESS_SLAVE)
             {
                 MasterRuntimeDiag.slave_message_count++;
-                const LoRaMessage *slave = &g_event.data.lora_message;
-                if ((g_pending.active != 0U) && (g_pending.slave_state == 2U) &&
-                    ((uint32_t)(now_ms - g_pending.slave_start_tick) < MASTER_SLAVE_RESPONSE_TIMEOUT_MS) &&
-                    (slave->type == LORA_MSG_TELEMETRY) &&
-                    (slave->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE) &&
-                    (slave->payload[0] == 0U) &&
-                    (slave->flow_id == g_pending.slave_flow_id))
-                {
-                    uint32_t elapsed = now_ms - g_pending.slave_start_tick;
-                    memcpy(g_pending.slave_data, &slave->payload[1], 8U);
-                    g_pending.slave_online = 1U;
-                    g_pending.slave_state = 3U;
-                    MasterRuntimeDiag.slave_response_match_count++;
-                    MasterRuntimeDiag.last_slave_flow_id = slave->flow_id;
-                    MasterRuntimeDiag.last_slave_response_ms = elapsed;
-                    if (elapsed > MasterRuntimeDiag.max_slave_response_ms)
-                    { MasterRuntimeDiag.max_slave_response_ms = elapsed; }
-                }
-                else { MasterRuntimeDiag.slave_response_unmatched_count++; }
+                MasterRuntime_HandleSlave(&g_event.data.lora_message,
+                                           now_ms, g_event.received_tick);
             }
             else
             {
@@ -242,14 +340,25 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
         if (g_pending.slave_state == 0U)
         {
             LoRaMessage query;
-            MasterRuntime_SetAddress(&query, LORA_MSG_READ_TELEMETRY,
+            MasterRuntime_SetAddress(&query, g_pending.request_type,
                 LORA_ROLE_SLAVE, LORA_PROTOCOL_SINGLE_GROUP, g_pending.slave_flow_id);
-            query.payload_length = 1U;
-            query.payload[0] = g_pending.force_sample;
+            if (g_pending.request_type == LORA_MSG_SET_WINDOW)
+            {
+                query.payload_length = 2U;
+                query.payload[0] = LORA_WINDOW_SERVO_ID;
+                query.payload[1] = g_pending.window_action;
+            }
+            else
+            {
+                query.payload_length = 1U;
+                query.payload[0] = g_pending.force_sample;
+            }
             if (MasterRuntime_Queue(&query) != 0U)
             {
                 g_pending.slave_state = 1U;
-                MasterRuntimeDiag.slave_request_queued_count++;
+                if (g_pending.request_type == LORA_MSG_SET_WINDOW)
+                { MasterRuntimeDiag.window_request_queued_count++; }
+                else { MasterRuntimeDiag.slave_request_queued_count++; }
             }
         }
         if (((g_pending.slave_state <= 1U) &&
@@ -258,10 +367,26 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
              ((uint32_t)(now_ms - g_pending.slave_start_tick) >= MASTER_SLAVE_RESPONSE_TIMEOUT_MS)))
         {
             g_pending.slave_state = 3U;
-            MasterRuntimeDiag.telemetry_timeout_count++;
-            MasterRuntimeDiag.last_timeout_flow_id = g_pending.flow_id;
+            if (g_pending.request_type == LORA_MSG_SET_WINDOW)
+            {
+                g_pending.window_status = LORA_WINDOW_STATUS_TIMEOUT;
+                MasterRuntimeDiag.window_timeout_count++;
+            }
+            else
+            {
+                MasterRuntimeDiag.telemetry_timeout_count++;
+                MasterRuntimeDiag.last_timeout_flow_id = g_pending.flow_id;
+            }
         }
         if ((g_pending.slave_state == 3U) &&
+            (g_pending.request_type == LORA_MSG_SET_WINDOW))
+        {
+            if (MasterRuntime_QueueWindowAck(g_pending.flow_id,
+                                             g_pending.window_status) != 0U)
+            { g_pending.active = 0U; }
+        }
+        else if ((g_pending.slave_state == 3U) &&
+            (g_pending.request_type == LORA_MSG_READ_TELEMETRY) &&
             ((g_pending.force_sample == 0U) ||
              (MasterBme280Diag.completed_count != g_pending.sample_generation)))
         {
@@ -288,6 +413,12 @@ uint8_t MasterRuntime_CanTransmit(void)
 
 uint8_t MasterRuntime_IsSlaveQueryCurrent(uint16_t flow_id)
 {
+    return MasterRuntime_IsSlaveRequestCurrent(LORA_MSG_READ_TELEMETRY, flow_id);
+}
+
+uint8_t MasterRuntime_IsSlaveRequestCurrent(uint8_t request_type, uint16_t flow_id)
+{
     return ((g_pending.active != 0U) && (g_pending.slave_state == 1U) &&
+            (g_pending.request_type == request_type) &&
             (g_pending.slave_flow_id == flow_id)) ? 1U : 0U;
 }

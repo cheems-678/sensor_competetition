@@ -12,6 +12,7 @@ typedef enum
 typedef struct
 {
     MasterEventType type;
+    uint32_t received_tick; /* Complete LoRa frame reception, local metadata only. */
     union
     {
         LoRaMessage lora_message;

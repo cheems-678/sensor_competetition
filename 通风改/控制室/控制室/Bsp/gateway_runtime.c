@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-/* 必须与 protocol/LORA_TELEMETRY.md 和主机 lora_protocol.c 保持一致。 */
+/* Must match PROTOCOL_V4.md and the master's lora_protocol.c. */
 #define GATEWAY_HEAD_1                  LORA_PROTOCOL_HEAD_0
 #define GATEWAY_HEAD_2                  LORA_PROTOCOL_HEAD_1
 #define GATEWAY_VERSION                 LORA_PROTOCOL_VERSION
@@ -20,6 +20,7 @@
 #define GATEWAY_TYPE_READ_TELEMETRY     (0x01U)
 #define GATEWAY_TYPE_TELEMETRY          (0x02U)
 #define GATEWAY_TYPE_SET_FAN_SPEED      (0x10U)
+#define GATEWAY_TYPE_SET_WINDOW         (0x11U)
 #define GATEWAY_TYPE_ACK                (0x20U)
 #define GATEWAY_TYPE_ERROR              (0x7EU)
 #define GATEWAY_ERROR_STATE_NOT_ALLOWED (0x02U)
@@ -134,14 +135,37 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
         case GATEWAY_TYPE_READ_TELEMETRY:
             return ((message->payload_length == 1U) && (message->payload[0] <= 1U)) ? 1U : 0U;
         case GATEWAY_TYPE_TELEMETRY:
-            return (message->payload_length == GATEWAY_TELEMETRY_PAYLOAD_SIZE) ? 1U : 0U;
+            if ((message->source_role != GATEWAY_ROLE_MASTER) ||
+                (message->destination_role != GATEWAY_ROLE_CONTROL_ROOM))
+            {
+                return 0U;
+            }
+            if (message->payload_length == GATEWAY_TELEMETRY_PAYLOAD_SIZE)
+            {
+                return ((message->payload[0] == 0x0BU) ||
+                        (message->payload[0] == 0x0FU)) ? 1U : 0U;
+            }
+            if (message->payload_length == LORA_PROTOCOL_LEGACY_TELEMETRY_BYTES)
+            {
+                return ((message->payload[0] == 0U) || (message->payload[0] == 1U) ||
+                        (message->payload[0] == 3U) || (message->payload[0] == 7U)) ? 1U : 0U;
+            }
+            return 0U;
         case GATEWAY_TYPE_SET_FAN_SPEED:
             return ((message->payload_length == 2U) &&
                     (message->payload[0] >= 1U) &&
                     (message->payload[0] <= 4U) &&
                     (message->payload[1] <= 100U)) ? 1U : 0U;
+        case GATEWAY_TYPE_SET_WINDOW:
+            return ((message->source_role == GATEWAY_ROLE_CONTROL_ROOM) &&
+                    (message->destination_role == GATEWAY_ROLE_MASTER) &&
+                    (message->payload_length == 2U) &&
+                    (message->payload[0] == 1U) &&
+                    (message->payload[1] <= 1U)) ? 1U : 0U;
         case GATEWAY_TYPE_ACK:
-            return (message->payload_length == 2U) ? 1U : 0U;
+            return ((message->payload_length == 2U) &&
+                    ((message->payload[0] != GATEWAY_TYPE_SET_WINDOW) ||
+                     (message->payload[1] <= 3U))) ? 1U : 0U;
         case GATEWAY_TYPE_ERROR:
             return ((message->payload_length >= 1U) && (message->payload_length <= 16U)) ? 1U : 0U;
         default:
@@ -304,6 +328,7 @@ static uint8_t Gateway_IsPcCommand(const GatewayMessage *message)
     {
         case GATEWAY_TYPE_READ_TELEMETRY:
         case GATEWAY_TYPE_SET_FAN_SPEED:
+        case GATEWAY_TYPE_SET_WINDOW:
             return 1U;
         default:
             return 0U;

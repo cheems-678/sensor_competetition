@@ -14,6 +14,11 @@
 #define MASTER_SLAVE_RESPONSE_TIMEOUT_MS          (500UL)
 #define MASTER_SLAVE_QUEUE_TIMEOUT_MS             (1000UL)
 
+/* PA7 光敏 DO：高表示暗；稳定确认与 WS2812 失败重试均不阻塞。 */
+#define MASTER_LIGHT_STABLE_MS                   (1000UL)
+#define MASTER_LIGHT_RETRY_MS                    (1000UL)
+#define MASTER_LIGHT_WHITE_LEVEL                 (51U)
+
 /* PB0 雨滴输入：低电平表示 LM393 已检测到雨滴。 */
 #define MASTER_RAIN_ASSERT_MS                   (200UL)
 

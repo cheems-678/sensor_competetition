@@ -757,6 +757,36 @@
               <FileType>1</FileType>
               <FilePath>..\App\slave_bme280.c</FilePath>
             </File>
+            <File>
+              <FileName>sph0645.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\sph0645.c</FilePath>
+            </File>
+            <File>
+              <FileName>acoustic_processing.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\acoustic_processing.c</FilePath>
+            </File>
+            <File>
+              <FileName>slave_acoustic.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\slave_acoustic.c</FilePath>
+            </File>
+            <File>
+              <FileName>sg90_test_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\sg90_test_pwm.c</FilePath>
+            </File>
+            <File>
+              <FileName>slave_servo_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\slave_servo_test.c</FilePath>
+            </File>
+            <File>
+              <FileName>sg90_standalone_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\sg90_standalone_test.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

@@ -20,6 +20,7 @@ static uint8_t g_lora_parser_initialized;
 static uint8_t g_lora_tx_frame[LORA_PROTOCOL_MAX_FRAME_SIZE];
 static uint16_t g_lora_tx_frame_length;
 static uint8_t g_lora_tx_pending;
+static uint32_t g_lora_tx_enqueued_tick;
 
 #define LORA_COMMAND_RETRY_COUNT 3U
 #define LORA_RX_PROCESS_BUDGET 128U
@@ -259,11 +260,19 @@ void LoraP2PTX(void)
   LoRaMessage message;
   LoRaProtocolStatus status;
 
+  /* Expire a held telemetry frame even while waiting for a receive window. */
+  if ((g_lora_tx_pending != 0U) &&
+      (MasterQueues_IsLoRaExpired(g_lora_tx_frame[3], g_lora_tx_enqueued_tick,
+                                 HAL_GetTick()) != 0U))
+  {
+    g_lora_tx_pending = 0U;
+    MasterQueueDiag.lora_tx_expired_count++;
+  }
   if (MasterRuntime_CanTransmit() == 0U) { return; }
 
   if (g_lora_tx_pending == 0U)
   {
-    if (MasterQueues_ReceiveLoRa(&message) == 0U)
+    if (MasterQueues_ReceiveLoRaTimed(&message, &g_lora_tx_enqueued_tick) == 0U)
     {
       return;
     }
@@ -285,9 +294,11 @@ void LoraP2PTX(void)
    * 再让同一个LoRa模块反向发送，避免模块仍处于接收/串口吐包阶段。
    */
   /* A UART failure or long queue stall must not send an expired query later. */
-  if ((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) &&
+  if (((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) ||
+       (g_lora_tx_frame[3] == LORA_MSG_SET_WINDOW)) &&
       (g_lora_tx_frame[6] == LORA_ROLE_SLAVE) &&
-      (MasterRuntime_IsSlaveQueryCurrent((uint16_t)(g_lora_tx_frame[8] |
+      (MasterRuntime_IsSlaveRequestCurrent(g_lora_tx_frame[3],
+        (uint16_t)(g_lora_tx_frame[8] |
         ((uint16_t)g_lora_tx_frame[9] << 8U))) == 0U))
   {
     g_lora_tx_pending = 0U;
@@ -296,6 +307,15 @@ void LoraP2PTX(void)
   if ((uint32_t)(HAL_GetTick() - g_lora_last_rx_tick) <
       LORA_TURNAROUND_DELAY_MS)
   {
+    return;
+  }
+
+  /* The timestamp is never refreshed by encoding or a failed UART retry. */
+  if (MasterQueues_IsLoRaExpired(g_lora_tx_frame[3], g_lora_tx_enqueued_tick,
+                                HAL_GetTick()) != 0U)
+  {
+    g_lora_tx_pending = 0U;
+    MasterQueueDiag.lora_tx_expired_count++;
     return;
   }
 
@@ -309,7 +329,8 @@ void LoraP2PTX(void)
     return;
   }
   g_lora_tx_pending = 0U;
-  if ((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) &&
+  if (((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) ||
+       (g_lora_tx_frame[3] == LORA_MSG_SET_WINDOW)) &&
       (g_lora_tx_frame[6] == LORA_ROLE_SLAVE))
   {
     MasterRuntime_NotifySlaveRequestSent(
@@ -369,6 +390,7 @@ void LoraP2PRX(void)
       }
       memset(&event, 0, sizeof(event));
       event.type = MASTER_EVENT_LORA_MESSAGE;
+      event.received_tick = g_lora_last_rx_tick;
       event.data.lora_message = g_lora_received_message;
       if (MasterQueues_SendEvent(&event) == 0U)
       {

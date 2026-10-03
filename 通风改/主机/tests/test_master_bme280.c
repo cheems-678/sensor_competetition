@@ -16,6 +16,7 @@ static BME280_Status init_status, trigger_status, read_status;
 static BME280_Data sensor_data;
 static unsigned read_count, init_count, send_count, fan_count, light_count;
 static uint8_t last_channel, last_duty, event_ready, fail_send;
+static uint8_t preserve_received_tick;
 static MasterEvent event;
 static LoRaMessage sent;
 static uint16_t slave_flow;
@@ -87,7 +88,8 @@ uint8_t MasterQueues_SendLoRa(const LoRaMessage *message)
     if (message->destination_role == LORA_ROLE_SLAVE)
     {
         assert(message->destination_group == 1U);
-        assert(message->type == LORA_MSG_READ_TELEMETRY);
+        assert(message->type == LORA_MSG_READ_TELEMETRY ||
+               message->type == LORA_MSG_SET_WINDOW);
         slave_flow = message->flow_id;
     }
     sent = *message;
@@ -104,6 +106,7 @@ static void reset(uint32_t start)
     sensor_data.pressure_pa = 101325U;
     read_count = init_count = send_count = fan_count = light_count = 0U;
     event_ready = fail_send = 0U;
+    preserve_received_tick = 0U;
     memset(&sent, 0, sizeof(sent));
     MasterRuntime_Init();
 }
@@ -117,7 +120,8 @@ static void request(uint8_t type, uint16_t flow, uint8_t value, uint8_t duty)
     event.data.lora_message.source_group = 0U;
     event.data.lora_message.destination_role = LORA_ROLE_MASTER;
     event.data.lora_message.destination_group = 1U;
-    event.data.lora_message.payload_length = type == LORA_MSG_SET_FAN_SPEED ? 2U : 1U;
+    event.data.lora_message.payload_length =
+        (type == LORA_MSG_SET_FAN_SPEED || type == LORA_MSG_SET_WINDOW) ? 2U : 1U;
     event.data.lora_message.flow_id = flow;
     event.data.lora_message.payload[0] = value;
     event.data.lora_message.payload[1] = duty;
@@ -127,6 +131,8 @@ static void request(uint8_t type, uint16_t flow, uint8_t value, uint8_t duty)
 static void process(uint32_t now)
 {
     tick = now;
+    if ((event_ready != 0U) && (preserve_received_tick == 0U))
+    { event.received_tick = now; }
     MasterRuntime_ProcessOne(tick);
 }
 
@@ -156,16 +162,17 @@ static void send_slave_query(uint32_t now)
 static void assert_telemetry(uint16_t flow, uint8_t valid)
 {
     static const uint8_t invalid[] = {
-        3U, 0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+        0x0BU, 0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
         0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU
     };
     assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == flow);
-    assert(sent.payload_length == 18U);
+    assert(sent.payload_length == 26U);
+    assert(memcmp(&sent.payload[18], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
     if (valid == 0U) { assert(memcmp(sent.payload, invalid, sizeof(invalid)) == 0); }
     else
     {
         static const uint8_t expected[] = {
-            3U, 0xC8U, 0xFFU, 0xF4U, 1U, 0xCDU, 0x8BU, 1U, 0U,
+            0x0BU, 0xC8U, 0xFFU, 0xF4U, 1U, 0xCDU, 0x8BU, 1U, 0U,
             0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU
         };
         assert(memcmp(sent.payload, expected, sizeof(expected)) == 0);
@@ -294,8 +301,8 @@ static void test_force_sample_and_fan_during_conversion(void)
     assert(!MasterRuntime_CanTransmit());
     slave_reply(slave_flow, 0U);
     process(11U);
-    assert(sent.payload[0] == 7U);
-    sent.payload[0] = 3U; /* Online sensor failure still has invalid slave slots. */
+    assert(sent.payload[0] == 0x0FU);
+    sent.payload[0] = 0x0BU; /* Online sensor failure still has invalid slave slots. */
     assert_telemetry(9U, 1U);
     assert(light_count == 4U);
     request(LORA_MSG_READ_TELEMETRY, 11U, 1U, 0U);
@@ -306,8 +313,8 @@ static void test_force_sample_and_fan_during_conversion(void)
     assert(sent.destination_role == LORA_ROLE_SLAVE); /* Await new local sample too. */
     process(22U);
     process(23U);
-    assert(sent.payload[0] == 7U);
-    sent.payload[0] = 3U;
+    assert(sent.payload[0] == 0x0FU);
+    sent.payload[0] = 0x0BU;
     assert_telemetry(11U, 1U);
 }
 
@@ -332,7 +339,7 @@ static void test_failed_force_and_queue_retry(void)
     assert(send_count == 1U && MasterRuntimeDiag.lora_queue_failure_count == 1U);
     fail_send = 0U;
     process(11U);
-    sent.payload[0] = 3U;
+    sent.payload[0] = 0x0BU;
     assert_telemetry(13U, 1U);
     process(12U);
     assert(send_count == 2U);
@@ -354,7 +361,7 @@ static void test_busy_force_and_unsolicited_slave(void)
     slave_reply(slave_flow, 1U);
     process(10U);
     assert(sent.flow_id == 14U && sent.type == LORA_MSG_TELEMETRY);
-    assert(sent.payload[0] == 7U && sent.payload[9] == 250U);
+    assert(sent.payload[0] == 0x0FU && sent.payload[9] == 250U);
     assert(sent.payload[1] == 0xC8U); /* Master reading never overwritten. */
     assert(MasterRuntimeDiag.slave_response_match_count == 1U);
     slave_reply(slave_flow, 1U);
@@ -476,6 +483,293 @@ static void test_five_minute_virtual_run(void)
     assert(MasterBme280Diag.last_error == BME280_OK);
 }
 
+static void slave_reply_audio(uint16_t flow, uint32_t left, uint32_t right)
+{
+    unsigned i;
+    slave_reply(flow, 1U);
+    event.data.lora_message.payload_length = 26U;
+    event.data.lora_message.payload[0] = 8U;
+    for (i = 0U; i < 4U; i++)
+    {
+        event.data.lora_message.payload[18U + i] = (uint8_t)(left >> (8U * i));
+        event.data.lora_message.payload[22U + i] = (uint8_t)(right >> (8U * i));
+    }
+}
+
+static uint32_t read_u32(const uint8_t *bytes)
+{
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8U) |
+           ((uint32_t)bytes[2] << 16U) | ((uint32_t)bytes[3] << 24U);
+}
+
+static void test_extended_audio_and_aggregate_expiry(void)
+{
+    reset(0U);
+    request(LORA_MSG_READ_TELEMETRY, 40U, 0U, 0U); process(0U);
+    send_slave_query(50U);
+    slave_reply_audio((uint16_t)(slave_flow + 1U), 7U, 9U); process(51U);
+    assert(MasterRuntimeDiag.slave_response_unmatched_count == 1U);
+    slave_reply_audio(slave_flow, 0U, 131071U); process(52U);
+    assert(sent.payload_length == 26U && sent.payload[0] == 0x0FU);
+    assert(read_u32(&sent.payload[18]) == 0U);
+    assert(read_u32(&sent.payload[22]) == 131071U);
+    assert(sent.payload[9] == 250U && sent.payload[1] == 0xC8U);
+
+    /* Queue failure must not make the same snapshot fresh again. */
+    request(LORA_MSG_READ_TELEMETRY, 41U, 0U, 0U); process(60U);
+    send_slave_query(110U);
+    slave_reply_audio(slave_flow, 70000U, 17U);
+    fail_send = 1U; process(111U);
+    process(410U); /* 299 ms: still the received snapshot. */
+    fail_send = 0U; process(411U); /* 300 ms: both invalid, BME retained. */
+    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 41U);
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
+    assert(read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
+    assert(sent.payload[0] == 0x0FU && sent.payload[9] == 250U);
+
+    /* Local event queue delay counts toward audio age, not a new reception. */
+    request(LORA_MSG_READ_TELEMETRY, 42U, 0U, 0U); process(420U);
+    send_slave_query(470U);
+    slave_reply_audio(slave_flow, 80000U, 65536U);
+    event.received_tick = 471U; preserve_received_tick = 1U; process(771U);
+    assert(sent.flow_id == 42U && sent.payload[0] == 0x0FU);
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
+    preserve_received_tick = 0U;
+
+    reset(0xFFFFFF00U);
+    request(LORA_MSG_READ_TELEMETRY, 43U, 0U, 0U); process(tick);
+    send_slave_query(0xFFFFFF32U);
+    slave_reply_audio(slave_flow, 131071U, 0U);
+    fail_send = 1U; process(0xFFFFFF33U);
+    fail_send = 0U; process(95U); /* 300 ms modulo subtraction. */
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
+    assert(read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
+
+    reset(0U);
+    request(LORA_MSG_READ_TELEMETRY, 44U, 0U, 0U); process(0U);
+    send_slave_query(50U);
+    slave_reply_audio(slave_flow, 0xFFFFFFFFU, 0xFFFFFFFFU); process(51U);
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
+    assert(sent.payload[0] == 0x0FU); /* Link online is not sensor validity. */
+}
+
+static void window_ack(uint16_t flow, uint8_t status)
+{
+    request(LORA_MSG_ACK, flow, LORA_MSG_SET_WINDOW, status);
+    event.data.lora_message.source_role = LORA_ROLE_SLAVE;
+    event.data.lora_message.source_group = 1U;
+    event.data.lora_message.payload_length = 2U;
+}
+
+static void assert_window_ack(uint16_t flow, uint8_t status)
+{
+    assert(sent.type == LORA_MSG_ACK && sent.flow_id == flow);
+    assert(sent.source_role == LORA_ROLE_MASTER && sent.source_group == 1U);
+    assert(sent.destination_role == LORA_ROLE_CONTROL_ROOM && sent.destination_group == 0U);
+    assert(sent.payload_length == 2U && sent.payload[0] == LORA_MSG_SET_WINDOW);
+    assert(sent.payload[1] == status);
+}
+
+static void test_window_forward_and_real_ack(void)
+{
+    uint8_t status;
+    for (status = 0U; status <= 3U; status++)
+    {
+        unsigned sample_attempts;
+        reset(0U); process(0U); process(10U);
+        sample_attempts = MasterBme280Diag.sample_attempt_count;
+        request(LORA_MSG_SET_WINDOW, (uint16_t)(0x0300U + status), 1U, 1U);
+        process(11U);
+        assert(sent.type == LORA_MSG_SET_WINDOW && sent.destination_role == LORA_ROLE_SLAVE);
+        assert(sent.payload_length == 2U && sent.payload[0] == 1U && sent.payload[1] == 1U);
+        assert(sent.flow_id == 1U && sent.flow_id != (uint16_t)(0x0300U + status));
+        assert(MasterRuntime_IsSlaveRequestCurrent(LORA_MSG_SET_WINDOW, slave_flow));
+        assert(!MasterRuntime_IsSlaveRequestCurrent(LORA_MSG_READ_TELEMETRY, slave_flow));
+        assert(!MasterRuntime_IsSlaveQueryCurrent(slave_flow));
+        assert(MasterRuntime_CanTransmit() && send_count == 1U);
+        window_ack(slave_flow, status); process(12U); /* Not yet sent: ignore. */
+        assert(send_count == 1U && MasterRuntimeDiag.window_response_match_count == 0U);
+        send_slave_query(60U);
+        window_ack(slave_flow, status); process(61U);
+        assert_window_ack((uint16_t)(0x0300U + status), status);
+        assert(MasterRuntime_CanTransmit() && send_count == 2U);
+        assert(MasterRuntimeDiag.window_command_count == 1U);
+        assert(MasterRuntimeDiag.window_response_match_count == 1U);
+        assert(MasterRuntimeDiag.window_request_queued_count == 1U);
+        assert(MasterRuntimeDiag.window_reply_count == 1U);
+        assert(MasterRuntimeDiag.telemetry_request_count == 0U);
+        assert(MasterRuntimeDiag.telemetry_reply_count == 0U);
+        assert(MasterRuntimeDiag.telemetry_timeout_count == 0U);
+        assert(MasterRuntimeDiag.slave_response_match_count == 0U);
+        assert(MasterBme280Diag.sample_attempt_count == sample_attempts);
+        window_ack(slave_flow, status); process(62U);
+        assert(send_count == 2U); /* A duplicate final ACK cannot reopen a transaction. */
+    }
+}
+
+static void test_window_wrong_reply_rejection(void)
+{
+    uint16_t flow;
+    reset(0U);
+    request(LORA_MSG_SET_WINDOW, 100U, 1U, 0U); process(0U);
+    flow = slave_flow;
+    send_slave_query(50U);
+    window_ack((uint16_t)(flow + 1U), 0U); process(51U);
+    window_ack(flow, 0U); event.data.lora_message.payload[0] = LORA_MSG_SET_FAN_SPEED; process(52U);
+    window_ack(flow, 4U); process(53U);
+    window_ack(flow, 0U); event.data.lora_message.payload_length = 1U; process(54U);
+    slave_reply_audio(flow, 1U, 2U); process(55U); /* TELEMETRY cannot confirm a window. */
+    window_ack(flow, 0U); event.data.lora_message.source_group = 2U; process(56U);
+    window_ack(flow, 0U); event.data.lora_message.destination_role = LORA_ROLE_CONTROL_ROOM; process(57U);
+    assert(MasterRuntimeDiag.window_response_unmatched_count == 5U);
+    assert(MasterRuntimeDiag.address_drop_count == 2U);
+    assert(!MasterRuntime_CanTransmit() && send_count == 1U);
+    window_ack(flow, 0U); process(58U);
+    assert_window_ack(100U, 0U);
+    assert(MasterRuntimeDiag.window_response_match_count == 1U);
+    assert(MasterRuntimeDiag.slave_response_match_count == 0U);
+}
+
+static void test_window_busy_does_not_replace_telemetry_or_fan(void)
+{
+    uint16_t flow;
+    reset(0U);
+    request(LORA_MSG_READ_TELEMETRY, 200U, 1U, 0U); process(0U);
+    flow = slave_flow; send_slave_query(0U);
+    request(LORA_MSG_SET_WINDOW, 201U, 1U, 1U); process(1U);
+    assert_window_ack(201U, 3U);
+    assert(slave_flow == flow && !MasterRuntime_CanTransmit());
+    window_ack(flow, 0U); process(2U); /* Even an identical flow has wrong reply type. */
+    assert(MasterRuntimeDiag.slave_response_unmatched_count == 1U);
+    request(LORA_MSG_SET_FAN_SPEED, 202U, 2U, 50U); process(3U);
+    assert(fan_count == 1U && last_channel == 2U && last_duty == 50U);
+    assert(sent.type == LORA_MSG_ACK && sent.payload[0] == LORA_MSG_SET_FAN_SPEED);
+    assert(!MasterRuntime_CanTransmit());
+    slave_reply_audio(flow, 7U, 9U); process(10U);
+    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 200U && sent.payload[0] == 0x0FU);
+    assert(read_u32(&sent.payload[18]) == 7U && read_u32(&sent.payload[22]) == 9U);
+    assert(MasterRuntimeDiag.window_busy_count == 1U && MasterRuntimeDiag.window_request_queued_count == 0U);
+
+    request(LORA_MSG_SET_WINDOW, 203U, 1U, 0U); process(11U);
+    flow = slave_flow; send_slave_query(61U);
+    request(LORA_MSG_READ_TELEMETRY, 204U, 1U, 0U); process(62U);
+    assert(sent.type == LORA_MSG_ERROR && sent.flow_id == 204U && sent.payload[0] == 1U);
+    request(LORA_MSG_SET_WINDOW, 205U, 1U, 1U); process(63U);
+    assert_window_ack(205U, 3U);
+    assert(slave_flow == flow && !MasterRuntime_CanTransmit());
+    window_ack(flow, 1U); process(64U);
+    assert_window_ack(203U, 1U);
+    assert(MasterRuntimeDiag.telemetry_reply_count == 1U && MasterRuntimeDiag.telemetry_timeout_count == 0U);
+}
+
+static void test_window_queue_rx_timeout_and_wrap(void)
+{
+    uint16_t flow;
+    reset(0U); fail_send = 1U;
+    request(LORA_MSG_SET_WINDOW, 300U, 1U, 1U); process(0U);
+    assert(send_count == 0U && MasterRuntimeDiag.lora_queue_failure_count == 1U);
+    fail_send = 0U; process(10U);
+    flow = slave_flow;
+    assert(MasterRuntime_IsSlaveRequestCurrent(LORA_MSG_SET_WINDOW, flow));
+    process(999U); assert(sent.type == LORA_MSG_SET_WINDOW);
+    process(1000U); assert_window_ack(300U, 2U);
+    assert(!MasterRuntime_IsSlaveRequestCurrent(LORA_MSG_SET_WINDOW, flow));
+    MasterRuntime_NotifySlaveRequestSent(flow, 1001U);
+    assert(MasterRuntime_CanTransmit());
+    assert(MasterRuntimeDiag.window_timeout_count == 1U && MasterRuntimeDiag.telemetry_timeout_count == 0U);
+
+    reset(0U); fail_send = 1U;
+    request(LORA_MSG_SET_WINDOW, 303U, 1U, 1U); process(0U);
+    process(999U); process(1000U); /* Full queue prevents both request and result. */
+    assert(send_count == 0U && MasterRuntimeDiag.window_request_queued_count == 0U);
+    assert(MasterRuntimeDiag.window_timeout_count == 1U && MasterRuntimeDiag.window_reply_count == 0U);
+    fail_send = 0U; process(1001U);
+    assert_window_ack(303U, 2U);
+    assert(send_count == 1U && MasterRuntimeDiag.window_request_queued_count == 0U);
+
+    reset(0U); request(LORA_MSG_SET_WINDOW, 301U, 1U, 0U); process(0U);
+    send_slave_query(900U); /* RX deadline is not the original queue deadline. */
+    process(1399U); assert(sent.type == LORA_MSG_SET_WINDOW && !MasterRuntime_CanTransmit());
+    window_ack(slave_flow, 0U); process(1400U); /* Exactly 500 ms is too late. */
+    assert_window_ack(301U, 2U);
+    assert(MasterRuntimeDiag.window_response_match_count == 0U);
+
+    reset(0xFFFFFF00U); request(LORA_MSG_SET_WINDOW, 302U, 1U, 1U); process(tick);
+    send_slave_query(0xFFFFFF32U);
+    process(293U); assert(!MasterRuntime_CanTransmit());
+    process(294U); assert_window_ack(302U, 2U);
+    assert(MasterRuntimeDiag.window_timeout_count == 1U && MasterRuntimeDiag.telemetry_timeout_count == 0U);
+
+    reset(0xFFFFFF00U); request(LORA_MSG_SET_WINDOW, 304U, 1U, 0U); process(tick);
+    send_slave_query(0xFFFFFF32U);
+    window_ack(slave_flow, 0U); process(0U);
+    assert_window_ack(304U, 0U);
+    assert(MasterRuntimeDiag.window_response_match_count == 1U && MasterRuntimeDiag.window_timeout_count == 0U);
+}
+
+static void test_window_final_ack_queue_failure_keeps_result(void)
+{
+    uint16_t flow;
+    reset(0U); request(LORA_MSG_SET_WINDOW, 400U, 1U, 1U); process(0U);
+    flow = slave_flow; send_slave_query(50U);
+    fail_send = 1U;
+    window_ack(flow, 0U); process(51U);
+    assert(send_count == 1U && MasterRuntimeDiag.window_response_match_count == 1U);
+    window_ack(flow, 1U); process(52U); /* Cannot replace the stored successful result. */
+    request(LORA_MSG_SET_WINDOW, 401U, 1U, 0U); process(53U);
+    assert(MasterRuntimeDiag.window_busy_count == 1U && slave_flow == flow);
+    process(5000U); /* Reply queuing delay must not turn success into timeout. */
+    fail_send = 0U; process(5001U);
+    assert_window_ack(400U, 0U);
+    assert(MasterRuntimeDiag.window_reply_count == 1U && MasterRuntimeDiag.window_timeout_count == 0U);
+    process(5002U); assert(send_count == 2U);
+}
+
+static void test_window_then_forced_telemetry_is_independent(void)
+{
+    uint16_t old_flow;
+    reset(0U); process(0U); process(10U);
+    request(LORA_MSG_SET_WINDOW, 500U, 1U, 1U); process(11U);
+    old_flow = slave_flow; send_slave_query(61U);
+    window_ack(old_flow, 0U); process(62U);
+    assert(MasterBme280Diag.sample_attempt_count == 1U);
+    request(LORA_MSG_READ_TELEMETRY, 501U, 1U, 0U); process(63U);
+    assert(slave_flow == (uint16_t)(old_flow + 1U));
+    send_slave_query(113U);
+    window_ack(old_flow, 0U); process(114U);
+    assert(!MasterRuntime_CanTransmit());
+    slave_reply_audio(slave_flow, 17U, 19U); process(115U);
+    assert(sent.type == LORA_MSG_READ_TELEMETRY); /* Forced conversion began at 114 ms. */
+    process(124U);
+    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 501U && sent.payload[0] == 0x0FU);
+    assert(read_u32(&sent.payload[18]) == 17U && read_u32(&sent.payload[22]) == 19U);
+    assert(MasterBme280Diag.sample_attempt_count == 2U);
+    assert(MasterRuntimeDiag.window_response_match_count == 1U);
+    assert(MasterRuntimeDiag.slave_response_match_count == 1U);
+}
+
+static void test_window_slave_flow_wrap_and_malformed_request(void)
+{
+    uint32_t index;
+    reset(0U);
+    request(LORA_MSG_SET_WINDOW, 600U, 2U, 0U); process(0U);
+    request(LORA_MSG_SET_WINDOW, 600U, 1U, 2U); process(0U);
+    request(LORA_MSG_SET_WINDOW, 600U, 1U, 0U);
+    event.data.lora_message.payload_length = 1U; process(0U);
+    assert(send_count == 0U && MasterRuntimeDiag.window_command_count == 0U);
+    for (index = 0U; index < 65537U; index++)
+    {
+        request(LORA_MSG_SET_WINDOW, (uint16_t)(index + 100U), 1U, (uint8_t)(index & 1U));
+        process(index * 2U);
+        assert(slave_flow == (uint16_t)(index + 1U));
+        send_slave_query(index * 2U);
+        window_ack(slave_flow, 0U); process(index * 2U + 1U);
+        assert_window_ack((uint16_t)(index + 100U), 0U);
+    }
+    assert(MasterRuntimeDiag.window_response_match_count == 65537U);
+    assert(MasterRuntimeDiag.telemetry_reply_count == 0U);
+}
+
 int main(void)
 {
     test_conversion_and_cache();
@@ -489,6 +783,14 @@ int main(void)
     test_rounding_and_measurement_boundaries();
     test_five_minute_virtual_run();
     test_address_filter_late_reply_queue_timeout_and_wrap();
-    puts("11 master BME/runtime test groups passed (including 5-minute virtual run)");
+    test_extended_audio_and_aggregate_expiry();
+    test_window_forward_and_real_ack();
+    test_window_wrong_reply_rejection();
+    test_window_busy_does_not_replace_telemetry_or_fan();
+    test_window_queue_rx_timeout_and_wrap();
+    test_window_final_ack_queue_failure_keeps_result();
+    test_window_then_forced_telemetry_is_independent();
+    test_window_slave_flow_wrap_and_malformed_request();
+    puts("19 master BME/runtime/window test groups passed (including audio and 5-minute virtual run)");
     return 0;
 }

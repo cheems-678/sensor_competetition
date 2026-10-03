@@ -2,6 +2,9 @@
 
 #include "lora.h"
 #include "slave_bme280.h"
+#include "slave_acoustic.h"
+#include "slave_servo_test.h"
+#include "sg90_test_pwm.h"
 
 #include <string.h>
 
@@ -11,11 +14,15 @@
 #define FRAME_MAX_PAYLOAD            (128U)
 #define FRAME_MIN_SIZE               (13U)
 #define FRAME_MAX_SIZE               (141U)
-#define FRAME_TELEMETRY_PAYLOAD_SIZE (18U)
+#define FRAME_TELEMETRY_PAYLOAD_SIZE (26U)
+#define FRAME_ACOUSTIC_LAYOUT        (0x08U)
 #define FRAME_ROLE_MASTER            (0x02U)
 #define FRAME_ROLE_SLAVE             (0x03U)
 #define FRAME_TYPE_READ_TELEMETRY    (0x01U)
 #define FRAME_TYPE_TELEMETRY         (0x02U)
+#define FRAME_TYPE_SET_WINDOW        (0x11U)
+#define FRAME_TYPE_ACK               (0x20U)
+#define FRAME_WINDOW_ACK_SIZE        (15U)
 #define RX_RING_SIZE                 (256U)
 #define RX_RING_MASK                 (RX_RING_SIZE - 1U)
 #define TX_RETRY_COUNT               (3U)
@@ -66,6 +73,15 @@ static volatile uint32_t g_last_rx_tick;
 static uint32_t g_seen_overflow;
 static uint32_t g_tx_sample_tick, g_last_sample_tick;
 static uint8_t g_tx_sample_valid, g_last_sample_valid;
+static SlaveAcousticSnapshot g_tx_acoustic, g_last_acoustic;
+static uint8_t g_tx_acoustic_valid, g_last_acoustic_valid;
+/* Window ACK never borrows the telemetry frame, cache or forced sample slot. */
+static uint8_t g_window_ack_pending;
+static uint8_t g_window_ack_frame[FRAME_WINDOW_ACK_SIZE];
+static uint8_t g_window_ack_attempt_count;
+static uint8_t g_window_action;
+static uint16_t g_window_flow_id;
+static uint32_t g_window_ack_not_before_tick;
 
 SlaveRuntimeDiagnostics SlaveRuntimeDiag;
 
@@ -169,10 +185,17 @@ static void SlaveRuntime_WriteU32(uint8_t *destination, uint32_t value)
     destination[3] = (uint8_t)((value >> 24U) & 0xFFUL);
 }
 
+static void SlaveRuntime_UpdateTxCrc(void)
+{
+    uint16_t crc = SlaveRuntime_Crc16(&g_tx_frame[2],
+                                     (uint16_t)(9U + g_tx_frame[10]));
+    g_tx_frame[g_tx_frame_length - 2U] = (uint8_t)crc;
+    g_tx_frame[g_tx_frame_length - 1U] = (uint8_t)(crc >> 8U);
+}
+
 static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
 {
     uint8_t payload_length = FRAME_TELEMETRY_PAYLOAD_SIZE;
-    uint16_t crc;
     SlaveBme280Sample sample;
 
     g_tx_frame[0] = FRAME_HEAD_1;
@@ -188,18 +211,12 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_tx_frame[10] = payload_length;
 
     /* Slave response uses the original first BME slots; master aggregates it. */
-    memset(&g_tx_frame[11], 0, payload_length);
-    g_tx_frame[11] = 0U;
+    memset(&g_tx_frame[11], 0xFF, payload_length);
+    g_tx_frame[11] = FRAME_ACOUSTIC_LAYOUT;
     SlaveRuntime_WriteU16(&g_tx_frame[12],
                           (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
     SlaveRuntime_WriteU16(&g_tx_frame[14], SLAVE_HUMIDITY_INVALID_X10);
     SlaveRuntime_WriteU32(&g_tx_frame[16], SLAVE_PRESSURE_INVALID_PA);
-    SlaveRuntime_WriteU16(&g_tx_frame[20], 0xFFFFU);
-    SlaveRuntime_WriteU16(&g_tx_frame[22], 0xFFFFU);
-    g_tx_frame[24] = 0xFFU;
-    SlaveRuntime_WriteU16(&g_tx_frame[25],
-                          (uint16_t)SLAVE_TEMPERATURE_INVALID_X10);
-    SlaveRuntime_WriteU16(&g_tx_frame[27], SLAVE_HUMIDITY_INVALID_X10);
     g_tx_sample_valid = 0U;
     if (SlaveBme280_GetSample(g_current_tick, &sample) != 0U)
     {
@@ -210,10 +227,16 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
         SlaveRuntime_WriteU32(&g_tx_frame[16], sample.pressure_pa);
     }
 
+    g_tx_acoustic_valid = SlaveAcoustic_GetRecentMax(g_current_tick,
+                                                   &g_tx_acoustic);
+    if (g_tx_acoustic_valid != 0U)
+    {
+        SlaveRuntime_WriteU32(&g_tx_frame[29], g_tx_acoustic.rms_left);
+        SlaveRuntime_WriteU32(&g_tx_frame[33], g_tx_acoustic.rms_right);
+    }
+
     g_tx_frame_length = (uint16_t)(FRAME_MIN_SIZE + payload_length);
-    crc = SlaveRuntime_Crc16(&g_tx_frame[2], (uint16_t)(9U + payload_length));
-    g_tx_frame[g_tx_frame_length - 2U] = (uint8_t)(crc & 0xFFU);
-    g_tx_frame[g_tx_frame_length - 1U] = (uint8_t)(crc >> 8U);
+    SlaveRuntime_UpdateTxCrc();
 
     memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
     g_last_temp_frame_length = g_tx_frame_length;
@@ -223,6 +246,8 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_last_force = request_type;
     g_last_sample_valid = g_tx_sample_valid;
     g_last_sample_tick = g_tx_sample_tick;
+    g_last_acoustic = g_tx_acoustic;
+    g_last_acoustic_valid = g_tx_acoustic_valid;
 
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = g_current_tick + SLAVE_REPLY_DELAY_MS;
@@ -258,17 +283,80 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
         g_tx_pending = 1U;
         g_tx_sample_valid = g_last_sample_valid;
         g_tx_sample_tick = g_last_sample_tick;
+        g_tx_acoustic = g_last_acoustic;
+        g_tx_acoustic_valid = g_last_acoustic_valid;
     }
     return 1U;
 }
 
+static void SlaveRuntime_HandleWindow(const SlaveMessage *message)
+{
+    uint8_t status;
+    uint16_t crc;
+
+    if ((message->payload_length != 2U) || (message->payload[0] != 1U) ||
+        (message->payload[1] > 1U))
+    {
+        SlaveRuntimeDiag.ignored_message_count++;
+        return;
+    }
+    if (g_window_ack_pending != 0U)
+    {
+        if ((message->flow_id == g_window_flow_id) &&
+            (message->payload[1] == g_window_action))
+        {
+            SlaveRuntimeDiag.duplicate_request_count++;
+        }
+        else
+        {
+            SlaveRuntimeDiag.ignored_message_count++;
+        }
+        return;
+    }
+
+    /* Reserve first: an accepted action can never lose its response slot. */
+    g_window_ack_pending = 1U;
+    g_window_flow_id = message->flow_id;
+    g_window_action = message->payload[1];
+    g_window_ack_attempt_count = 0U;
+    SlaveRuntimeDiag.request_count++;
+    SlaveRuntimeDiag.last_flow_id = message->flow_id;
+    status = (SlaveServoTest_SetWindow(g_window_action, HAL_GetTick()) != 0U) ?
+             0U : 1U;
+    g_window_ack_not_before_tick = HAL_GetTick() +
+                                 ((status == 0U) ? SG90_TEST_PERIOD_MS : 0U);
+    g_window_ack_frame[0] = FRAME_HEAD_1;
+    g_window_ack_frame[1] = FRAME_HEAD_2;
+    g_window_ack_frame[2] = FRAME_VERSION;
+    g_window_ack_frame[3] = FRAME_TYPE_ACK;
+    g_window_ack_frame[4] = FRAME_ROLE_SLAVE;
+    g_window_ack_frame[5] = g_local_group;
+    g_window_ack_frame[6] = FRAME_ROLE_MASTER;
+    g_window_ack_frame[7] = g_local_group;
+    SlaveRuntime_WriteU16(&g_window_ack_frame[8], message->flow_id);
+    g_window_ack_frame[10] = 2U;
+    g_window_ack_frame[11] = FRAME_TYPE_SET_WINDOW;
+    g_window_ack_frame[12] = status;
+    crc = SlaveRuntime_Crc16(&g_window_ack_frame[2], 11U);
+    SlaveRuntime_WriteU16(&g_window_ack_frame[13], crc);
+}
+
 static void SlaveRuntime_HandleMessage(const SlaveMessage *message)
 {
-    if ((message->type != FRAME_TYPE_READ_TELEMETRY) ||
-        (message->source_role != FRAME_ROLE_MASTER) ||
+    if ((message->source_role != FRAME_ROLE_MASTER) ||
         (message->destination_role != FRAME_ROLE_SLAVE) ||
         (message->source_group != g_local_group) ||
-        (message->destination_group != g_local_group) ||
+        (message->destination_group != g_local_group))
+    {
+        SlaveRuntimeDiag.ignored_message_count++;
+        return;
+    }
+    if (message->type == FRAME_TYPE_SET_WINDOW)
+    {
+        SlaveRuntime_HandleWindow(message);
+        return;
+    }
+    if ((message->type != FRAME_TYPE_READ_TELEMETRY) ||
         (message->payload_length != 1U) || (message->payload[0] > 1U))
     {
         SlaveRuntimeDiag.ignored_message_count++;
@@ -373,6 +461,12 @@ void SlaveRuntime_Init(uint8_t local_group)
     g_tx_frame_length = 0U;
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = 0U;
+    g_window_ack_pending = 0U;
+    g_window_ack_attempt_count = 0U;
+    g_window_action = 0U;
+    g_window_flow_id = 0U;
+    g_window_ack_not_before_tick = 0U;
+    memset(g_window_ack_frame, 0, sizeof(g_window_ack_frame));
     g_current_tick = 0U;
     g_last_temp_frame_length = 0U;
     g_last_temp_flow_id = 0U;
@@ -381,6 +475,9 @@ void SlaveRuntime_Init(uint8_t local_group)
     g_last_temp_tick = g_last_rx_tick = HAL_GetTick();
     g_seen_overflow = 0U;
     g_tx_sample_valid = g_last_sample_valid = 0U;
+    g_tx_acoustic_valid = g_last_acoustic_valid = 0U;
+    memset(&g_tx_acoustic, 0, sizeof(g_tx_acoustic));
+    memset(&g_last_acoustic, 0, sizeof(g_last_acoustic));
     SlaveBme280_Init(HAL_GetTick());
     (void)memset(&SlaveRuntimeDiag, 0, sizeof(SlaveRuntimeDiag));
 }
@@ -437,23 +534,62 @@ void SlaveRuntime_Process(uint32_t now_ms)
         SlaveRuntime_BuildResponse(1U, g_force_flow);
         g_force_pending = 0U;
     }
+    if (g_window_ack_pending != 0U)
+    {
+        now_ms = HAL_GetTick();
+        if (((uint32_t)(now_ms - g_last_rx_tick) >= SLAVE_REPLY_DELAY_MS) &&
+            (SlaveRuntime_DeadlineReached(now_ms,
+                                         g_window_ack_not_before_tick) != 0U))
+        {
+            if (LORA_SendData(g_window_ack_frame, FRAME_WINDOW_ACK_SIZE) != 0U)
+            {
+                g_window_ack_pending = 0U;
+                g_window_ack_attempt_count = 0U;
+                SlaveRuntimeDiag.reply_count++;
+            }
+            else
+            {
+                g_window_ack_attempt_count++;
+                g_window_ack_not_before_tick = HAL_GetTick() + 10U;
+                if (g_window_ack_attempt_count >= TX_RETRY_COUNT)
+                {
+                    g_window_ack_pending = 0U;
+                    g_window_ack_attempt_count = 0U;
+                    SlaveRuntimeDiag.tx_failure_count++;
+                }
+            }
+            /* Allow the ACK's radio transmission to finish before telemetry. */
+            g_tx_not_before_tick = HAL_GetTick() + SLAVE_REPLY_DELAY_MS;
+        }
+        return; /* ACK has priority; never send both frames in one iteration. */
+    }
     if ((g_tx_pending != 0U) &&
         ((uint32_t)(now_ms - g_last_rx_tick) >= SLAVE_REPLY_DELAY_MS) &&
         (SlaveRuntime_DeadlineReached(now_ms, g_tx_not_before_tick) != 0U))
     {
+        uint8_t changed = 0U;
         if ((g_tx_sample_valid != 0U) &&
             ((SlaveBme280Diag.sample_valid == 0U) ||
              ((uint32_t)(now_ms - g_tx_sample_tick) >= 2000U)))
         {
-            uint16_t crc;
             SlaveRuntime_WriteU16(&g_tx_frame[12], 0x8000U);
             SlaveRuntime_WriteU16(&g_tx_frame[14], 0xFFFFU);
             SlaveRuntime_WriteU32(&g_tx_frame[16], 0xFFFFFFFFUL);
-            crc = SlaveRuntime_Crc16(&g_tx_frame[2], 27U);
-            g_tx_frame[29] = (uint8_t)crc;
-            g_tx_frame[30] = (uint8_t)(crc >> 8U);
-            memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
             g_tx_sample_valid = g_last_sample_valid = 0U;
+            changed = 1U;
+        }
+        if ((g_tx_acoustic_valid != 0U) &&
+            (SlaveAcoustic_IsSnapshotValid(now_ms, &g_tx_acoustic) == 0U))
+        {
+            SlaveRuntime_WriteU32(&g_tx_frame[29], SLAVE_SOUND_RMS_INVALID);
+            SlaveRuntime_WriteU32(&g_tx_frame[33], SLAVE_SOUND_RMS_INVALID);
+            g_tx_acoustic_valid = g_last_acoustic_valid = 0U;
+            changed = 1U;
+        }
+        if (changed != 0U)
+        {
+            SlaveRuntime_UpdateTxCrc();
+            memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
         }
         if (LORA_SendData(g_tx_frame, g_tx_frame_length) != 0U)
         {
