@@ -1,0 +1,86 @@
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { FanControl } from './fan-control'
+
+afterEach(cleanup)
+const fan = { channel: 1, pin: 'PB1', duty: 0, status: '未发送' }
+
+describe('fan release rules and independent drafts', () => {
+  it('sends once on pointer release, never on drag or cancellation', () => {
+    const submit = vi.fn()
+    render(<FanControl fan={fan} enabled submit={submit} />)
+    const slider = screen.getByRole('slider')
+    fireEvent.pointerDown(slider, { button: 0, pointerId: 1 })
+    fireEvent.change(slider, { target: { value: '25' } })
+    fireEvent.change(slider, { target: { value: '32' } })
+    expect(submit).not.toHaveBeenCalled()
+    fireEvent.pointerUp(slider, { pointerId: 1 })
+    expect(submit).toHaveBeenCalledExactlyOnceWith(1, 32)
+    fireEvent.pointerUp(slider, { pointerId: 1 })
+    expect(submit).toHaveBeenCalledTimes(1)
+    fireEvent.pointerDown(slider, { button: 0, pointerId: 2 })
+    fireEvent.change(slider, { target: { value: '40' } })
+    fireEvent.pointerCancel(slider, { pointerId: 2 })
+    fireEvent.pointerUp(slider, { pointerId: 2 })
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends on adjustment key release, never keydown or key repeat', () => {
+    const submit = vi.fn()
+    render(<FanControl fan={fan} enabled submit={submit} />)
+    const slider = screen.getByRole('slider')
+    fireEvent.keyDown(slider, { key: 'ArrowRight' })
+    fireEvent.change(slider, { target: { value: '1' } })
+    fireEvent.keyDown(slider, { key: 'ArrowRight', repeat: true })
+    fireEvent.change(slider, { target: { value: '2' } })
+    expect(submit).not.toHaveBeenCalled()
+    fireEvent.keyUp(slider, { key: 'ArrowRight' })
+    expect(submit).toHaveBeenCalledExactlyOnceWith(1, 2)
+    fireEvent.keyUp(slider, { key: 'ArrowRight' })
+    fireEvent.keyUp(slider, { key: 'Tab' })
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves in-progress drafts across newer device snapshots', () => {
+    const submit = vi.fn()
+    const { rerender } = render(<FanControl fan={fan} enabled submit={submit} />)
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: '25.6' } })
+    rerender(<FanControl fan={{ ...fan, duty: 80, status: '已确认 80%' }} enabled submit={submit} />)
+    expect(input).toHaveValue('25.6')
+    fireEvent.click(screen.getByRole('button'))
+    expect(submit).toHaveBeenCalledExactlyOnceWith(1, 26)
+    expect(input).toHaveValue('26')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button'))
+    expect(submit).toHaveBeenLastCalledWith(1, '')
+  })
+
+  it('keeps drafts editable while busy and cancels active submission', () => {
+    const submit = vi.fn()
+    const { rerender } = render(<FanControl fan={fan} enabled submit={submit} />)
+    const slider = screen.getByRole('slider')
+    fireEvent.pointerDown(slider, { button: 0, pointerId: 1 })
+    fireEvent.change(slider, { target: { value: '25' } })
+    rerender(<FanControl fan={fan} enabled={false} submit={submit} />)
+    expect(slider).toBeEnabled()
+    expect(screen.getByRole('textbox')).toBeEnabled()
+    expect(screen.getByRole('button')).toBeDisabled()
+    fireEvent.change(slider, { target: { value: '50' } })
+    fireEvent.pointerUp(slider, { pointerId: 1 })
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('passes hexadecimal and binary text unchanged to Python validation', () => {
+    const submit = vi.fn()
+    render(<FanControl fan={fan} enabled submit={submit} />)
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: '0x10' } })
+    fireEvent.click(screen.getByRole('button'))
+    expect(submit).toHaveBeenLastCalledWith(1, '0x10')
+    expect(input).toHaveValue('0x10')
+    fireEvent.change(input, { target: { value: '0b10' } })
+    fireEvent.click(screen.getByRole('button'))
+    expect(submit).toHaveBeenLastCalledWith(1, '0b10')
+  })
+})

@@ -17,7 +17,7 @@ typedef struct {
     int32_t mean_left, mean_right, last_left, last_right;
     uint32_t nonzero_left, nonzero_right, padding_errors_left, padding_errors_right;
     uint32_t total_padding_errors_left, total_padding_errors_right;
-    uint32_t history_count, validity_epoch;
+    uint32_t validity_epoch;
     uint16_t raw_words[16];
 } SlaveAcousticDiagnostics;
 
@@ -29,9 +29,9 @@ typedef struct {
 extern volatile SlaveAcousticDiagnostics SlaveAcousticDiag;
 void SlaveAcoustic_Init(uint32_t now_ms);
 void SlaveAcoustic_Process(uint32_t now_ms);
-/* Non-consuming maxima of complete short windows younger than 1000 ms.
+/* Non-consuming stereo RMS from the latest complete, valid short window.
    Tick/epoch must travel with cached responses, never renewed by a query. */
-uint8_t SlaveAcoustic_GetRecentMax(uint32_t now_ms, SlaveAcousticSnapshot *snapshot);
+uint8_t SlaveAcoustic_GetLatest(uint32_t now_ms, SlaveAcousticSnapshot *snapshot);
 uint8_t SlaveAcoustic_IsSnapshotValid(uint32_t now_ms,
                                     const SlaveAcousticSnapshot *snapshot);
 

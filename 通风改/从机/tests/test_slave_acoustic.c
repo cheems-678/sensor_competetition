@@ -323,7 +323,7 @@ static void test_stale_boundary_and_fresh_window_recovery(void)
     SlaveAcoustic_Process(465U);
     CHECK(SlaveAcousticDiag.window_valid == 0U);
     CHECK(SlaveAcousticDiag.state == SLAVE_ACOUSTIC_CAPTURING);
-    CHECK(SlaveAcousticDiag.rms_left == 1000U); /* History stays visible. */
+    CHECK(SlaveAcousticDiag.rms_left == 1000U); /* Last diagnostic stays visible. */
 
     for (block = 0U; block < 4U; block++)
     {
@@ -471,41 +471,89 @@ static void feed_window(uint32_t *sequence, uint32_t *tick,
     }
 }
 
-static void test_recent_max_history_zero_and_independent_channels(void)
+static void test_latest_window_high_low_stereo_and_zero(void)
 {
-    SlaveAcousticSnapshot snapshot, again;
-    uint32_t sequence = 11U, tick = 165U, index;
+    SlaveAcousticSnapshot snapshot, again, loud;
+    uint32_t sequence = 11U, tick = 165U, epoch;
     begin_with_clean_window(0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, NULL) == 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick, NULL) == 0U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, NULL) == 0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
     CHECK(snapshot.rms_left == 1000U && snapshot.rms_right == 2000U);
+    epoch = snapshot.validity_epoch;
     feed_window(&sequence, &tick, 131071L, 12L);
+    CHECK(SlaveAcoustic_GetLatest(tick, &loud) == 1U);
+    CHECK(loud.rms_left == 131071U && loud.rms_right == 12U);
+    CHECK(loud.window_tick == tick && loud.validity_epoch == epoch);
+    /* The next complete window lowers left and raises right, as one pair. */
     feed_window(&sequence, &tick, 13L, 90000L);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
-    CHECK(snapshot.rms_left == 131071U && snapshot.rms_right == 90000U);
-    CHECK(snapshot.window_tick == tick);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &again) == 1U);
-    CHECK(memcmp(&snapshot, &again, sizeof(snapshot)) == 0);
-    CHECK(SlaveAcousticDiag.history_count == 3U);
-    /* Keep producing silence: the one-window transient expires after 1000 ms. */
-    for (index = 0U; index < 15U; index++)
-    {
-        feed_window(&sequence, &tick, 0L, 0L);
-    }
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
     CHECK(snapshot.rms_left == 13U && snapshot.rms_right == 90000U);
-    /* Right's transient completed one window later, so drops one window later. */
+    CHECK(snapshot.window_tick == tick && snapshot.validity_epoch == epoch);
+    CHECK(SlaveAcoustic_IsSnapshotValid(tick, &loud) == 1U);
+    CHECK(loud.rms_left == 131071U && loud.rms_right == 12U);
+    CHECK(SlaveAcoustic_GetLatest(tick + 5U, &again) == 1U);
+    CHECK(memcmp(&snapshot, &again, sizeof(snapshot)) == 0);
+    CHECK(SlaveAcousticDiag.window_count == 3U);
+    /* The first complete silent window replaces both earlier amplitudes. */
     feed_window(&sequence, &tick, 0L, 0L);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
     CHECK(snapshot.rms_left == 0U && snapshot.rms_right == 0U);
-    for (index = 0U; index < 40U; index++)
-    {
-        feed_window(&sequence, &tick, 17L, 23L);
-    }
-    CHECK(SlaveAcousticDiag.history_count == 32U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
+    CHECK(snapshot.window_tick == tick && snapshot.validity_epoch == epoch);
+    CHECK(SlaveAcousticDiag.window_count == 4U);
+    feed_window(&sequence, &tick, 17L, 23L);
+    CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
     CHECK(snapshot.rms_left == 17U && snapshot.rms_right == 23U);
+}
+
+static void test_partial_window_preserves_complete_snapshot(void)
+{
+    SlaveAcousticSnapshot complete, current;
+    uint32_t sequence = 11U, tick = 165U, block;
+    begin_with_clean_window(0U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &complete) == 1U);
+    amplitude_left = 9L;
+    amplitude_right = 11L;
+    for (block = 0U; block < 3U; block++)
+    {
+        feed_block(++sequence, tick += 16U, 0U, 0U);
+        CHECK(SlaveAcoustic_GetLatest(tick, &current) == 1U);
+        CHECK(memcmp(&complete, &current, sizeof(complete)) == 0);
+        CHECK(SlaveAcousticDiag.window_count == 1U);
+    }
+    feed_block(++sequence, tick += 16U, 0U, 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &current) == 1U);
+    CHECK(current.rms_left == 9U && current.rms_right == 11U);
+    CHECK(current.window_tick == tick);
+    CHECK(current.validity_epoch == complete.validity_epoch);
+    CHECK(SlaveAcousticDiag.window_count == 2U);
+}
+
+static void test_repeated_getters_do_not_consume_or_renew_window(void)
+{
+    static const uint32_t ages[] = {0U, 1U, 35U, 100U, 299U};
+    SlaveAcousticSnapshot complete, current;
+    uint32_t index, epoch;
+    begin_with_clean_window(0U);
+    CHECK(SlaveAcoustic_GetLatest(165U, &complete) == 1U);
+    epoch = complete.validity_epoch;
+    for (index = 0U; index < sizeof(ages) / sizeof(ages[0]); index++)
+    {
+        CHECK(SlaveAcoustic_GetLatest(165U + ages[index], &current) == 1U);
+        CHECK(memcmp(&complete, &current, sizeof(complete)) == 0);
+        CHECK(SlaveAcoustic_IsSnapshotValid(165U + ages[index], &complete) == 1U);
+        CHECK(SlaveAcousticDiag.window_tick == 165U);
+        CHECK(SlaveAcousticDiag.window_count == 1U);
+        CHECK(SlaveAcousticDiag.validity_epoch == epoch);
+    }
+    memset(&current, 0xFF, sizeof(current));
+    CHECK(SlaveAcoustic_GetLatest(465U, &current) == 0U);
+    CHECK(current.rms_left == 0U && current.rms_right == 0U);
+    CHECK(current.window_tick == 0U && current.validity_epoch == 0U);
+    CHECK(SlaveAcoustic_IsSnapshotValid(465U, &complete) == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
+    CHECK(SlaveAcousticDiag.validity_epoch != epoch);
+    CHECK(start_calls == 1U && stop_calls == 0U);
 }
 
 static void test_snapshot_stale_and_epoch_cannot_revive(void)
@@ -513,159 +561,154 @@ static void test_snapshot_stale_and_epoch_cannot_revive(void)
     SlaveAcousticSnapshot snapshot, fresh;
     uint32_t sequence = 11U, tick = 165U, epoch;
     begin_with_clean_window(0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick - 1U, &snapshot) == 1U);
     feed_window(&sequence, &tick, 7L, 11L);
     CHECK(SlaveAcoustic_IsSnapshotValid(464U, &snapshot) == 1U);
     /* Current capture remains fresh; original snapshot has crossed 300 ms. */
     CHECK(SlaveAcoustic_IsSnapshotValid(465U, &snapshot) == 0U);
     CHECK(SlaveAcousticDiag.window_valid == 1U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &snapshot) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
     epoch = snapshot.validity_epoch;
     feed_block(sequence + 2U, tick + 16U, 0U, 0U);
     sequence += 2U;
     tick += 16U;
-    CHECK(SlaveAcousticDiag.history_count == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
     CHECK(SlaveAcousticDiag.validity_epoch != epoch);
     /* The gap block starts a new accumulator. Three more make a clean window. */
     feed_block(++sequence, tick += 16U, 0U, 0U);
     feed_block(++sequence, tick += 16U, 0U, 0U);
     feed_block(++sequence, tick += 16U, 0U, 0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &fresh) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &fresh) == 1U);
     CHECK(fresh.rms_left == 7U && fresh.rms_right == 11U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, &snapshot) == 0U);
     snapshot = fresh;
     epoch = snapshot.validity_epoch;
-    /* One bad channel invalidates BOTH, dropping earlier maxima. */
+    /* One bad channel invalidates BOTH and discards the latest valid window. */
     feed_block(++sequence, tick += 16U, 0U, 0x0100U);
     feed_block(++sequence, tick += 16U, 0U, 0U);
     feed_block(++sequence, tick += 16U, 0U, 0U);
     feed_block(++sequence, tick += 16U, 0U, 0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &fresh) == 0U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &fresh) == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
     CHECK(SlaveAcousticDiag.validity_epoch != epoch);
     feed_window(&sequence, &tick, 0L, 0L);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &fresh) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &fresh) == 1U);
     CHECK(fresh.rms_left == 0U && fresh.rms_right == 0U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, &snapshot) == 0U);
     snapshot = fresh;
     epoch = snapshot.validity_epoch;
-    CHECK(SlaveAcoustic_GetRecentMax(tick + 299U, &fresh) == 1U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick + 300U, &fresh) == 0U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick + 299U, &fresh) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick + 300U, &fresh) == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
     CHECK(SlaveAcousticDiag.validity_epoch != epoch);
     epoch = SlaveAcousticDiag.validity_epoch;
     SlaveAcoustic_Process(tick + 301U);
     CHECK(SlaveAcousticDiag.validity_epoch == epoch); /* No per-loop epoch churn. */
     tick += 301U;
     feed_window(&sequence, &tick, 1L, 2L);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &fresh) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &fresh) == 1U);
     CHECK(fresh.rms_left == 1U && fresh.rms_right == 2U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, &snapshot) == 0U);
 }
 
-static void test_recent_max_wrap_and_fault_restart(void)
+static void test_latest_window_wrap_and_fault_restart(void)
 {
     SlaveAcousticSnapshot old, fresh;
     uint32_t started_at = UINT32_MAX - 200U;
-    uint32_t sequence = 11U, tick = started_at + 165U, index;
+    uint32_t sequence = 11U, tick = started_at + 165U;
     begin_with_clean_window(started_at);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &old) == 1U);
-    CHECK(SlaveAcoustic_IsSnapshotValid(tick + 299U, &old) == 1U);
-    for (index = 0U; index < 16U; index++)
-    {
-        feed_window(&sequence, &tick, 10L, 20L);
-    }
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &fresh) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &old) == 1U);
+    /* The lower stereo window completes after tick wraps to zero. */
+    feed_window(&sequence, &tick, 10L, 20L);
+    CHECK(SlaveAcoustic_GetLatest(tick, &fresh) == 1U);
     CHECK(fresh.rms_left == 10U && fresh.rms_right == 20U);
     old = fresh;
     check_error = SPH0645_ERROR_DMA;
     SlaveAcoustic_Process(tick + 1U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick + 1U, &fresh) == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick + 1U, &fresh) == 0U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick + 1U, &old) == 0U);
     SlaveAcoustic_Process(tick + 1001U);
     CHECK(SlaveAcousticDiag.state == SLAVE_ACOUSTIC_WARMUP);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick + 1001U, &fresh) == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick + 1001U, &fresh) == 0U);
 }
 
 static void test_isr_fault_invalidates_before_process(void)
 {
     SlaveAcousticSnapshot old, current;
     begin_with_clean_window(0U);
-    CHECK(SlaveAcoustic_GetRecentMax(165U, &old) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(165U, &old) == 1U);
     Sph0645Diag.running = 0U;
     Sph0645Diag.active_error = SPH0645_ERROR_DMA;
     /* No Process: the TX validity check must observe ISR-published failure. */
     CHECK(SlaveAcoustic_IsSnapshotValid(166U, &old) == 0U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
     CHECK(SlaveAcousticDiag.validity_epoch != old.validity_epoch);
-    CHECK(SlaveAcoustic_GetRecentMax(166U, &current) == 0U);
+    CHECK(SlaveAcoustic_GetLatest(166U, &current) == 0U);
     CHECK(stop_calls == 0U && start_calls == 1U); /* Getter cannot touch clocks. */
 
     begin_with_clean_window(0U);
-    CHECK(SlaveAcoustic_GetRecentMax(165U, &old) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(165U, &old) == 1U);
     Sph0645Diag.active_error = SPH0645_ERROR_IRQ_LATE;
-    CHECK(SlaveAcoustic_GetRecentMax(166U, &current) == 0U);
+    CHECK(SlaveAcoustic_GetLatest(166U, &current) == 0U);
     CHECK(SlaveAcoustic_IsSnapshotValid(166U, &old) == 0U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
 }
 
-static void test_exact_one_second_boundary_with_fresh_windows(void)
+static void test_latest_window_exact_stale_boundary_across_tick_wrap(void)
 {
     static const uint32_t starts[] = {0U, UINT32_MAX - 400U};
-    uint32_t scenario, index;
-    SlaveAcousticSnapshot snapshot;
+    uint32_t scenario;
+    SlaveAcousticSnapshot snapshot, latest;
     for (scenario = 0U; scenario < 2U; scenario++)
     {
-        uint32_t sequence = 11U, tick = starts[scenario] + 165U;
-        uint32_t peak_tick = tick;
+        uint32_t tick = starts[scenario] + 165U;
         begin_with_clean_window(starts[scenario]);
-        for (index = 0U; index < 15U; index++)
-        {
-            feed_window(&sequence, &tick, 0L, 0L);
-        }
-        CHECK(SlaveAcoustic_GetRecentMax(peak_tick + 999U, &snapshot) == 1U);
+        CHECK(SlaveAcoustic_GetLatest(tick, &snapshot) == 1U);
+        CHECK(SlaveAcoustic_GetLatest(tick + 299U, &latest) == 1U);
+        CHECK(memcmp(&snapshot, &latest, sizeof(snapshot)) == 0);
         CHECK(snapshot.rms_left == 1000U && snapshot.rms_right == 2000U);
-        CHECK(SlaveAcoustic_GetRecentMax(peak_tick + 1000U, &snapshot) == 1U);
-        CHECK(snapshot.rms_left == 0U && snapshot.rms_right == 0U);
-        CHECK(SlaveAcoustic_IsSnapshotValid(peak_tick + 1000U, &snapshot) == 1U);
+        CHECK(SlaveAcoustic_IsSnapshotValid(tick + 299U, &snapshot) == 1U);
+        CHECK(SlaveAcoustic_GetLatest(tick + 300U, &latest) == 0U);
+        CHECK(SlaveAcoustic_IsSnapshotValid(tick + 300U, &snapshot) == 0U);
+        CHECK(SlaveAcousticDiag.window_valid == 0U);
+        CHECK(SlaveAcousticDiag.validity_epoch != snapshot.validity_epoch);
     }
 }
 
-static void test_copy_drop_clears_peak_and_partial_accumulator(void)
+static void test_copy_drop_clears_latest_window_and_partial_accumulator(void)
 {
     SlaveAcousticSnapshot old, current;
     uint32_t sequence = 11U, tick = 165U;
     begin_with_clean_window(0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &old) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &old) == 1U);
     feed_block(++sequence, tick += 16U, 0U, 0U); /* Partial old loud window. */
     Sph0645Diag.dropped_blocks++;
     /* ReadBlock can fail without a fatal active_error. Getter must see the drop. */
     CHECK(Sph0645Diag.active_error == SPH0645_ERROR_NONE);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, &old) == 0U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &current) == 0U);
+    CHECK(SlaveAcousticDiag.window_valid == 0U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &current) == 0U);
     feed_window(&sequence, &tick, 0L, 0L);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &current) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &current) == 1U);
     CHECK(current.rms_left == 0U && current.rms_right == 0U);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, &old) == 0U);
 
     begin_with_clean_window(0U);
     sequence = 11U; tick = 165U;
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &old) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &old) == 1U);
     feed_block(++sequence, tick += 16U, 0U, 0U);
     queue_block(++sequence, tick += 16U, 0U, 0U);
     copy_race = 1U;
     SlaveAcoustic_Process(tick); /* ReadBlock publishes drop, then returns 0. */
     CHECK(SlaveAcousticDiag.window_valid == 0U);
-    CHECK(SlaveAcousticDiag.history_count == 0U);
     CHECK(Sph0645Diag.copy_races == 1U);
     CHECK(SlaveAcousticDiag.validity_epoch != old.validity_epoch);
     CHECK(SlaveAcoustic_IsSnapshotValid(tick, &old) == 0U);
     feed_window(&sequence, &tick, 0L, 0L);
-    CHECK(SlaveAcoustic_GetRecentMax(tick, &current) == 1U);
+    CHECK(SlaveAcoustic_GetLatest(tick, &current) == 1U);
     CHECK(current.rms_left == 0U && current.rms_right == 0U);
 }
 
@@ -680,12 +723,14 @@ int main(void)
     test_fault_stops_and_retries_once_per_second();
     test_initial_start_failure_and_bounded_repeat_failure();
     test_tick_and_sequence_wrap();
-    test_recent_max_history_zero_and_independent_channels();
+    test_latest_window_high_low_stereo_and_zero();
+    test_partial_window_preserves_complete_snapshot();
+    test_repeated_getters_do_not_consume_or_renew_window();
     test_snapshot_stale_and_epoch_cannot_revive();
-    test_recent_max_wrap_and_fault_restart();
+    test_latest_window_wrap_and_fault_restart();
     test_isr_fault_invalidates_before_process();
-    test_exact_one_second_boundary_with_fresh_windows();
-    test_copy_drop_clears_peak_and_partial_accumulator();
+    test_latest_window_exact_stale_boundary_across_tick_wrap();
+    test_copy_drop_clears_latest_window_and_partial_accumulator();
     printf("Slave acoustic service: %lu checks, %lu failures\n",
            (unsigned long)checks, (unsigned long)failures);
     return (failures == 0U) ? 0 : 1;

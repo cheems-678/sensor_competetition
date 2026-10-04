@@ -227,8 +227,8 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
         SlaveRuntime_WriteU32(&g_tx_frame[16], sample.pressure_pa);
     }
 
-    g_tx_acoustic_valid = SlaveAcoustic_GetRecentMax(g_current_tick,
-                                                   &g_tx_acoustic);
+    g_tx_acoustic_valid = SlaveAcoustic_GetLatest(g_current_tick,
+                                                &g_tx_acoustic);
     if (g_tx_acoustic_valid != 0U)
     {
         SlaveRuntime_WriteU32(&g_tx_frame[29], g_tx_acoustic.rms_left);

@@ -41,7 +41,7 @@ uint8_t Sg90TestPwm_SetPulse(uint16_t pulse_us)
 void Sg90TestPwm_Stop(void) { pwm_stop_calls++; pwm_pulse = 0U; }
 
 /* Capture itself is exercised by test_slave_acoustic; protocol owns snapshots. */
-uint8_t SlaveAcoustic_GetRecentMax(uint32_t now, SlaveAcousticSnapshot *snapshot)
+uint8_t SlaveAcoustic_GetLatest(uint32_t now, SlaveAcousticSnapshot *snapshot)
 {
     memset(snapshot, 0, sizeof(*snapshot));
     if (!audio_valid || (int32_t)(now - audio_tick) >= 300) { return 0U; }
@@ -392,6 +392,45 @@ static void test_audio_wire_values_and_duplicate_snapshot_age(void)
     assert_reply(0x4568U, 1U); assert_audio(70000U, 80000U);
 }
 
+static void test_audio_latest_low_and_zero_preserve_queued_snapshot(void)
+{
+    reset(0U); process(0U); process(20U);
+    audio_valid = 1U; audio_tick = 20U; audio_epoch = 1U;
+    audio_left = 90000U; audio_right = 131071U;
+    request(100U, 0U, 0U, 0U); process(21U);
+    /* A complete lower window arrives while the loud reply is still queued. */
+    audio_tick = 40U; audio_left = 7U; audio_right = 11U;
+    process(71U);
+    assert_reply(100U, 1U); assert_audio(90000U, 131071U);
+    request(101U, 0U, 0U, 0U); process(72U);
+    /* Zero is valid; the next flow uses it after the lower reply is sent. */
+    audio_tick = 80U; audio_left = audio_right = 0U;
+    process(122U);
+    assert_reply(101U, 1U); assert_audio(7U, 11U);
+    request(102U, 0U, 0U, 0U); process(123U); process(173U);
+    assert_reply(102U, 1U); assert_audio(0U, 0U);
+    assert(sent_count == 3U && SlaveRuntimeDiag.request_count == 3U);
+}
+
+static void test_audio_tx_exact_stale_boundary_with_newer_window(void)
+{
+    reset(0U); process(0U); process(20U);
+    audio_valid = 1U; audio_tick = 20U; audio_epoch = 1U;
+    audio_left = 123U; audio_right = 456U;
+    request(103U, 0U, 0U, 0U); process(21U); process(319U);
+    assert_reply(103U, 1U); assert_audio(123U, 456U); /* Age 299 ms. */
+
+    reset(0U); process(0U); process(20U);
+    audio_valid = 1U; audio_tick = 20U; audio_epoch = 1U;
+    audio_left = 123U; audio_right = 456U;
+    request(104U, 0U, 0U, 0U); process(270U); process(319U);
+    assert(sent_count == 0U);
+    audio_tick = 319U; audio_left = audio_right = 0U;
+    process(320U);
+    assert_reply(104U, 1U);
+    assert_audio(0xFFFFFFFFUL, 0xFFFFFFFFUL); /* Original age reaches 300 ms. */
+}
+
 static void test_audio_fault_epoch_pending_expiry_and_tx_retry(void)
 {
     reset(0U); process(0U); process(20U);
@@ -666,6 +705,8 @@ int main(void)
     test_driver_signed_calibration_and_invalid_raw();
     test_duplicate_snapshot_expires_despite_new_sample();
     test_audio_wire_values_and_duplicate_snapshot_age();
+    test_audio_latest_low_and_zero_preserve_queued_snapshot();
+    test_audio_tx_exact_stale_boundary_with_newer_window();
     test_audio_fault_epoch_pending_expiry_and_tx_retry();
     test_force_waits_only_for_bme_audio_failure_is_independent();
     test_window_strict_address_payload_and_crc();
@@ -676,6 +717,6 @@ int main(void)
     test_window_driver_failure_and_bounded_uart_retry();
     test_window_ack_tick_wrap_and_late_audio_expiry();
     test_window_timed_stop_and_stop_failure_preserve_telemetry();
-    puts("19 slave BME/I2C/runtime/audio-upload/timed-window test groups passed");
+    puts("21 slave BME/I2C/runtime/audio-upload/timed-window test groups passed");
     return 0;
 }

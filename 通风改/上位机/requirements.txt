@@ -1,0 +1,11 @@
+# Windows desktop runtime; install only in the project-local .venv.
+pyserial==3.5
+pywebview==6.2.1
+pythonnet==3.2.0; sys_platform == "win32"
+# Transitive versions verified with Python 3.13 on Windows.
+bottle==0.13.4
+proxy_tools==0.1.0
+typing_extensions==4.16.0
+clr_loader==0.3.1; sys_platform == "win32"
+cffi==2.1.1; sys_platform == "win32"
+pycparser==3.0; sys_platform == "win32"

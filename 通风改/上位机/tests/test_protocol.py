@@ -7,7 +7,7 @@ from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 
-MODULE_PATH = pathlib.Path(__file__).parents[1] / "main.py"
+MODULE_PATH = pathlib.Path(__file__).parents[1] / "legacy_tk.py"
 SPEC = importlib.util.spec_from_file_location("upper_v4", MODULE_PATH)
 UPPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPPER)
@@ -266,6 +266,8 @@ class TelemetryPollingTests(unittest.TestCase):
             TELEMETRY_POLL_INTERVAL_S=1.0, TELEMETRY_TIMEOUT_S=5.0,
             FIELD_LABELS=UPPER.MonitorApp.FIELD_LABELS,
             SOUND_LABELS=UPPER.MonitorApp.SOUND_LABELS,
+            SOUND_SECTION_TITLE=UPPER.MonitorApp.SOUND_SECTION_TITLE,
+            SOUND_HELP_TEXT=UPPER.MonitorApp.SOUND_HELP_TEXT,
             value_vars={name: ValueStub("old") for name, _, _ in UPPER.MonitorApp.FIELD_LABELS},
             sound_vars={name: ValueStub("old") for name, _ in UPPER.MonitorApp.SOUND_LABELS},
             slave_link_var=ValueStub("old"),
@@ -552,6 +554,48 @@ class AcousticDisplayTests(unittest.TestCase):
     def receive(self, payload, flow=1):
         self.app.telemetry_pending = (flow, 100.0)
         self.app._handle_frame(telemetry_frame(flow=flow, payload=payload))
+
+    def test_acoustic_labels_describe_latest_window_and_query_interval(self):
+        self.assertIn("最新短窗声音幅度", UPPER.MonitorApp.SOUND_SECTION_TITLE)
+        self.assertIn("RMS", UPPER.MonitorApp.SOUND_SECTION_TITLE)
+        self.assertIn("约63.7 ms完整采样窗", UPPER.MonitorApp.SOUND_HELP_TEXT)
+        self.assertIn("界面约每秒查询一次", UPPER.MonitorApp.SOUND_HELP_TEXT)
+        self.assertIn("PCM 计数，不是分贝", UPPER.MonitorApp.SOUND_HELP_TEXT)
+        for text in (UPPER.MonitorApp.SOUND_SECTION_TITLE, UPPER.MonitorApp.SOUND_HELP_TEXT):
+            self.assertNotIn("最大值", text)
+            self.assertNotIn("峰值", text)
+        self.assertEqual(UPPER.MonitorApp.TELEMETRY_POLL_INTERVAL_S, 1.0)
+
+    def test_matching_short_windows_replace_high_values_with_low_and_zero(self):
+        samples = ((123456, 98765), (77, 33), (0, 0))
+        for flow, (left, right) in enumerate(samples, start=1):
+            with self.subTest(flow=flow):
+                with patch.object(UPPER.time, "monotonic", return_value=99.0 + flow):
+                    self.receive(acoustic_payload(left=left, right=right), flow=flow)
+                self.assertEqual(self.app.sound_vars["sound_rms_1"].get(), str(left))
+                self.assertEqual(self.app.sound_vars["sound_rms_2"].get(), str(right))
+                self.assertEqual(self.app.last_telemetry_at, 99.0 + flow)
+                self.assertIsNone(self.app.telemetry_pending)
+        saved = [(call.args[1]["sound_rms_1"], call.args[1]["sound_rms_2"])
+                 for call in self.app.database.insert.call_args_list]
+        self.assertEqual(saved, list(samples))
+
+    def test_old_flow_and_timeout_cannot_restore_larger_short_window(self):
+        larger = acoustic_payload(left=123456, right=98765)
+        self.receive(larger, flow=1)
+        self.receive(acoustic_payload(left=0, right=0), flow=2)
+        self.app.telemetry_pending = (3, 100.0)
+        self.app._handle_frame(telemetry_frame(flow=1, payload=larger))
+        self.assertEqual(self.app.telemetry_pending, (3, 100.0))
+        self.assertTrue(all(value.get() == "0" for value in self.app.sound_vars.values()))
+        self.assertEqual(self.app.last_telemetry_at, 100.0)
+        with patch.object(UPPER.time, "monotonic", return_value=105.0):
+            self.app._poll_telemetry(105.0)
+            self.app._handle_frame(telemetry_frame(flow=3, payload=larger))
+        self.assertIsNone(self.app.telemetry_pending)
+        self.assertIsNone(self.app.last_telemetry_at)
+        self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
+        self.assertEqual(self.app.database.insert.call_count, 2)
 
     def test_integer_zero_sentinel_and_legacy_display(self):
         self.receive(acoustic_payload(left=0, right=123456))
@@ -904,16 +948,23 @@ class WindowControlTests(unittest.TestCase):
         self.app._refresh_ports = Mock()
         self.app._toggle_connection = Mock()
         self.app._preview_fan = Mock()
+        self.app._ui_scale = 1.0
+        for name in ("rowconfigure", "columnconfigure", "bind_class", "_layout_dashboard",
+                     "_update_scroll_region", "_on_dashboard_mousewheel"):
+            setattr(self.app, name, Mock())
         self.app.port_var = ValueStub("")
         created = []
         def widget(*args, **kwargs):
             result = Mock()
             result.options = kwargs
+            result.bindtags.return_value = ()
+            result.winfo_children.return_value = []
             created.append(result)
             return result
-        with patch.multiple(UPPER.ttk, LabelFrame=widget, Label=widget, Button=widget,
-                            Combobox=widget, Scale=widget, Spinbox=widget), \
+        with patch.multiple(UPPER.ttk, Frame=widget, LabelFrame=widget, Label=widget, Button=widget,
+                            Combobox=widget, Scale=widget, Spinbox=widget, Scrollbar=widget), \
                 patch.object(UPPER.tk, "StringVar", return_value=ValueStub("")), \
+                patch.object(UPPER.tk, "Canvas", side_effect=widget), \
                 patch.object(UPPER.tk, "Text", side_effect=widget):
             UPPER.MonitorApp._build_ui(self.app)
         self.assertEqual(self.app.window_buttons[1].options["text"], "打开窗户")

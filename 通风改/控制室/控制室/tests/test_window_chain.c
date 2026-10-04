@@ -43,7 +43,7 @@ void SlaveBme280_RequestSample(uint32_t now)
 { SlaveBme280Diag.sample_tick = now; SlaveBme280Diag.completed_count++; }
 uint8_t SlaveBme280_GetSample(uint32_t now, SlaveBme280Sample *sample)
 { (void)now; sample->temperature_x10 = 123; sample->humidity_x10 = 456U; sample->pressure_pa = 100123U; return 1U; }
-uint8_t SlaveAcoustic_GetRecentMax(uint32_t now, SlaveAcousticSnapshot *snapshot)
+uint8_t SlaveAcoustic_GetLatest(uint32_t now, SlaveAcousticSnapshot *snapshot)
 { snapshot->rms_left = 321U; snapshot->rms_right = 654U; snapshot->window_tick = now; snapshot->validity_epoch = 1U; return 1U; }
 uint8_t SlaveAcoustic_IsSnapshotValid(uint32_t now, const SlaveAcousticSnapshot *snapshot)
 { return ((uint32_t)(now - snapshot->window_tick) < 300U) ? 1U : 0U; }

@@ -1,0 +1,108 @@
+import { initialSnapshot, type Accepted, type DesktopAPI, type Snapshot } from './types'
+import { decimalDraft } from './duty'
+
+// Browser-only preview. No serial API, database or remote endpoint is used here.
+export class BrowserDemo implements DesktopAPI {
+  private state = initialSnapshot()
+  private logId = 0
+  private noticeId = 0
+  private nextReading = 0
+  private timers = new Set<ReturnType<typeof setTimeout>>()
+  constructor() {
+    this.state.demo = true
+    this.state.ports = ['DEMO · 模拟控制室']
+    this.state.port = this.state.ports[0]
+    this.log('演示模式：不连接硬件，不写入数据库。')
+    const query = new URLSearchParams(window.location.search)
+    if (query.get('fixture') === 'limits') {
+      this.state.connected = true
+      this.state.window.status = '开窗启动PWM已确认（完成/停止状态未知）；ACK 不表示动作完成、自动停止成功或机械窗户到位。'
+      this.state.telemetry = {
+        values: { master_temp: '-3276.7 °C', slave_temp: '3276.7 °C', master_humidity: '6553.4 %', slave_humidity: '6553.4 %', master_pressure: '4294967294 Pa', slave_pressure: '4294967294 Pa' },
+        sounds: { sound_rms_1: '0', sound_rms_2: '4294967294' }, slave_link: '未知（旧布局）', updated_at: '2026-10-04 23:59:59',
+      }
+      this.nextReading = Infinity
+      this.sync()
+    }
+  }
+  private log(message: string) {
+    const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    this.state.logs.push({ id: ++this.logId, text: `[${stamp}] ${message}` })
+    this.state.last_log_id = this.logId
+    this.state.revision++
+  }
+  private notice(title: string, message: string) { this.state.notice = { id: ++this.noticeId, title, message } }
+  private sync() {
+    const busy = this.state.window.busy
+    this.state.controls = { read_enabled: !busy, fan_enabled: !busy, window_enabled: this.state.connected && !busy }
+  }
+  private later(callback: () => void) {
+    const timer = setTimeout(() => { this.timers.delete(timer); callback() }, 700)
+    this.timers.add(timer)
+  }
+  private reading() {
+    this.state.telemetry = {
+      values: { master_temp: '24.6 °C', slave_temp: '23.8 °C', master_humidity: '48.2 %', slave_humidity: '51.4 %', master_pressure: '101326 Pa', slave_pressure: '101284 Pa' },
+      sounds: { sound_rms_1: '0', sound_rms_2: '186' }, slave_link: '在线', updated_at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    }
+    this.nextReading = Date.now() + 1000
+    this.state.revision++
+  }
+  async refresh_ports(): Promise<Accepted> { this.state.revision++; return { accepted: true } }
+  async connect(port: string): Promise<Accepted> {
+    if (!port.trim()) { this.notice('端口为空', '请输入或选择控制室串口'); return { accepted: true } }
+    this.state.connected = true
+    this.state.port = port
+    this.state.window.status = '已连接，尚未发送，位置未知'
+    this.nextReading = Date.now() + 1000
+    this.sync()
+    this.log(`演示连接 ${port}`)
+    return { accepted: true }
+  }
+  async disconnect(): Promise<Accepted> {
+    for (const timer of this.timers) clearTimeout(timer)
+    this.timers.clear()
+    this.state.connected = false
+    this.state.window = { busy: false, status: '已断开，位置未知' }
+    this.state.fans = this.state.fans.map(fan => ({ ...fan, status: '已断开，状态未知' }))
+    this.state.telemetry = initialSnapshot().telemetry
+    this.sync()
+    this.log('演示连接已断开')
+    return { accepted: true }
+  }
+  async read_once(): Promise<Accepted> {
+    if (!this.state.connected) this.notice('未连接', '请先连接控制室串口')
+    else if (!this.state.window.busy) { this.reading(); this.log('演示遥测更新') }
+    return { accepted: true }
+  }
+  async set_fan(channel: number, duty: number | string): Promise<Accepted> {
+    if (!this.state.connected) { this.notice('未连接', '请先连接控制室串口'); return { accepted: true } }
+    if (this.state.window.busy) return { accepted: true }
+    const number = typeof duty === 'string' ? decimalDraft(duty) : duty
+    if (!Number.isFinite(number) || number < 0 || number > 100) { this.notice('输入错误', '请输入 0–100 的占空比'); return { accepted: true } }
+    const fan = this.state.fans.find(item => item.channel === channel)
+    if (!fan) return { accepted: false }
+    fan.duty = Math.floor(number + 0.5)
+    fan.status = `等待确认 ${fan.duty}%`
+    this.log(`演示风机 ${channel} 提交 ${fan.duty}%`)
+    this.later(() => { fan.status = `已确认 ${fan.duty}%`; this.state.revision++ })
+    return { accepted: true }
+  }
+  async set_window(action: number): Promise<Accepted> {
+    if (!this.state.controls.window_enabled || (action !== 0 && action !== 1)) return { accepted: false }
+    const label = action === 1 ? '开窗' : '关窗'
+    this.state.window = { busy: true, status: `${label}等待确认` }
+    this.sync()
+    this.log(`演示${label}提交`)
+    this.later(() => {
+      this.state.window = { busy: false, status: `${label}启动PWM已确认（完成/停止状态未知）` }
+      this.sync()
+      this.log(`演示${label}启动PWM已确认`)
+    })
+    return { accepted: true }
+  }
+  async get_snapshot(after_log_id = 0): Promise<Snapshot> {
+    if (this.state.connected && !this.state.window.busy && Date.now() >= this.nextReading && !this.state.fans.some(fan => fan.status.startsWith('等待'))) this.reading()
+    return structuredClone({ ...this.state, logs: this.state.logs.filter(log => log.id > after_log_id) })
+  }
+}
