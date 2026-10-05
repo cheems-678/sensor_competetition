@@ -1,5 +1,31 @@
 # 从机电脑侧测试约定
 
+- MQ-2链路同步扩展现有BME/runtime测试：34字节/47字节整帧、有效零值及4095、重复请求源时间不刷新、发送前2秒失效、UART失败后ADC故障代次作废以及tick回绕；MQ采集使用替身，真实驱动/服务仍由各自测试负责。既有声学26字节输出断言升级为34字节，位置18/22保持。
+
+- ESP密码版构建需 `build/esp_ap_config.local.h` 中的假口令宏 `SLAVE_ESP_AP_PASSWORD`，从 `../App/esp_ap_config.example.h` 复制示例用于测试即可；该文件被Git忽略。下方ESP GCC命令增加 `-Ibuild`，测试不读取设备私人配置。状态机检查现代/旧版两条CWSAP命令均为WPA2，发送的口令与测试配置一致，不打印口令。
+- MQ-2新增测试：`test_slave_mq2.c` 用假 ADC 跑真实低速采样服务，检查启动/转换失败、超时恢复、源时间/序号、过期/回绕、0/4095与电压换算；`test_mq2_adc.c` 用HAL替身跑真实硬件驱动，检查PA7模拟输入、ADC1通道7、12 MHz时钟、长采样和非阻塞完成。ESP测试增加MQ/BME独立有效性与JSON容量边界；网页脚本检查MQ失效/过期/断线恢复。只证明软件，不证明模块存在或预热完成。
+
+```powershell
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../App -I../Bsp test_slave_mq2.c ../App/slave_mq2.c -o build/test_slave_mq2.exe
+& './build/test_slave_mq2.exe'
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Bsp test_mq2_adc.c ../Bsp/mq2_adc.c -o build/test_mq2_adc.exe
+& './build/test_mq2_adc.exe'
+```
+
+- `test_slave_esp_web.c` 使用假异步 UART 和 BME 缓存运行真实 `slave_esp_web.c`，验证 AT 配置与兼容回退、IPD/HTTP 分包、连接隔离、发送及故障恢复、采样有效性和舵机业务停止；不能替代 ESP 实板测试。`check_slave_web_page.cjs` 检查真实内置网页的脚本、非并发轮询和缺失数据状态。测试使用现有 GCC/Node，不安装依赖。
+- `test_esp_at_uart.c` 使用 `stubs/usart.h` 验证真实UART环形缓存、溢出、异步TX和错误重新挂接。`preview_slave_web_page.cjs` 仅在 `127.0.0.1:8766` 用模拟数据预览真实内置网页，不连接硬件；退出 Node 后停止服务，截图及提取的 HTML 放 `build/`。网页C常量使用UTF-8八进制字节，兼容Keil旧编译器的本机字符编码。
+
+```powershell
+Copy-Item -LiteralPath '../App/esp_ap_config.example.h' -Destination 'build/esp_ap_config.local.h'
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Ibuild -I../App -I../Bsp test_slave_esp_web.c ../App/slave_esp_web.c ../App/slave_servo_test.c -o build/test_slave_esp_web.exe
+& './build/test_slave_esp_web.exe'
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Bsp test_esp_at_uart.c ../Bsp/esp_at_uart.c -o build/test_esp_at_uart.exe
+& './build/test_esp_at_uart.exe'
+node check_slave_web_page.cjs
+```
+
+- 四路扩展测试在现有测试文件中覆盖编号1..4、不同方向/不同截止时间并行、重复不续时、反向隔离、回绕、逐路配置和失败隔离；BME/runtime测试覆盖所有编号路由及跨编号待ACK冲突。PWM寄存器测试test_servo_pwm.c用stubs/tim.h专用HAL替身编译真实驱动，检查共享定时器不复位、CCR独立及故障停机；产物沿用build/，不加入Keil，不替代实板波形验收。
+
 - `test_*.c` 测试真实 BME 驱动、I2C 恢复流程、裸机采样与 LoRa 服务，以及真实声学 PCM/RMS 算法；`stubs/` 为电脑侧 HAL 替身，不能加入 Keil 工程。
 - `test_slave_servo_test.c` 使用假 PWM 接口运行真实历史定位状态机和连续旋转型业务定时控制。业务测试覆盖停止脉宽启动、300 ms边界、到期只写一次停止脉宽、同方向在途重复不续时、反方向覆盖重新计时、停止后可重新动作、tick回绕/长停顿以及启动/运行/自动停止失败的停机保护；旧自动序列、20 ms限速、停留和独立模式仍回归。不证明真实PWM波形、精确转动时长、停止点或机械角度。
 - `test_sg90_standalone_test.c` 使用假 `HAL_Delay` 与 PWM 接口运行真实独立单轮动作，覆盖重复往返、每步先等 2 秒的调用顺序、1300–1700 us 范围、四个位置的更新失败立即返回，以及替身时间计数跨越回绕。PWM 只由 `main` 启动一次，单轮动作不启动、停机或重试；测试不验证 `main` 硬件初始化、真实 HAL 延时、PWM 波形或实物运动。
@@ -40,6 +66,13 @@ SG90 定位状态机测试沿用以上 PATH 与输出约定，在 `tests/` 执�
 ```powershell
 & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../App -I../Bsp test_slave_servo_test.c ../App/slave_servo_test.c -o build/test_slave_servo_test.exe
 & './build/test_slave_servo_test.exe'
+```
+
+四路 PWM 寄存器测试编译真实驱动，使用专用 `stubs/tim.h`；沿用以上 PATH 与输出约定：
+
+```powershell
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Bsp test_servo_pwm.c ../Bsp/sg90_test_pwm.c -o build/test_servo_pwm.exe
+& './build/test_servo_pwm.exe'
 ```
 
 SG90 独立测试模式的单轮动作测试沿用以上 PATH 与输出约定，在 `tests/` 执行；不需要运行通信或声学服务：

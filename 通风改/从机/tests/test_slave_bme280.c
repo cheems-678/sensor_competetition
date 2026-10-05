@@ -6,6 +6,7 @@
 #include "slave_bme280.h"
 #include "slave_protocol_runtime.h"
 #include "slave_acoustic.h"
+#include "slave_mq2.h"
 #include "slave_servo_test.h"
 #include "sg90_test_pwm.h"
 
@@ -20,8 +21,43 @@ static uint16_t pwm_pulse;
 static uint16_t gpio_levels, stuck_pins;
 static uint8_t sent[141];
 static uint16_t sent_len;
+volatile SlaveMq2Diagnostics SlaveMq2Diag;
+static SlaveMq2Sample mq2_sample;
+uint8_t SlaveMq2_GetSample(uint32_t now, SlaveMq2Sample *sample)
+{
+    if (!SlaveMq2Diag.valid || (uint32_t)(now - mq2_sample.tick) >= 2000U) { return 0U; }
+    *sample = mq2_sample; return 1U;
+}
 static uint8_t audio_valid;
 static uint32_t audio_tick, audio_epoch, audio_left, audio_right;
+
+static uint16_t extra_pulses[3];
+static unsigned extra_updates[3];
+static uint8_t extra_success[3] = {1U, 1U, 1U};
+uint8_t Sg90TestPwm_StartChannel(uint8_t id, uint16_t pulse)
+{
+    if (id < 2U || id > 4U) { return 0U; }
+    extra_pulses[id - 2U] = pulse;
+    extra_updates[id - 2U] = 0U;
+    extra_success[id - 2U] = 1U;
+    return 1U;
+}
+uint8_t Sg90TestPwm_SetChannelPulse(uint8_t id, uint16_t pulse)
+{
+    if (id < 2U || id > 4U || !extra_success[id - 2U]) { return 0U; }
+    extra_pulses[id - 2U] = pulse;
+    extra_updates[id - 2U]++;
+    return 1U;
+}
+void Sg90TestPwm_StopChannel(uint8_t id)
+{
+    if (id >= 2U && id <= 4U) { extra_pulses[id - 2U] = 0U; }
+}
+uint8_t Sg90TestPwm_IsChannelRunning(uint8_t id)
+{
+    if (id == 1U) { return (uint8_t)(pwm_pulse != 0U); }
+    return (uint8_t)(id >= 2U && id <= 4U && extra_pulses[id - 2U] != 0U);
+}
 
 uint8_t Sg90TestPwm_Start(uint16_t pulse_us)
 {
@@ -134,6 +170,7 @@ static void reset(uint32_t start)
     pwm_pulse = 0U;
     audio_valid = 0U;
     audio_tick = audio_epoch = audio_left = audio_right = 0U;
+    memset((void *)&SlaveMq2Diag, 0, sizeof(SlaveMq2Diag));
     gpio_levels = GPIO_PIN_6 | GPIO_PIN_7; stuck_pins = 0U;
     bank[0xD0] = 0x60U;
     for (i = 0U; i < 12U; i++) { put16(0x88U + i*2U, calibration[i]); }
@@ -206,11 +243,11 @@ static void assert_window_ack(uint16_t flow, uint8_t status)
 static void assert_reply(uint16_t flow, uint8_t valid)
 {
     unsigned index;
-    assert(sent_len == 39U && sent[2] == 4U && sent[3] == 2U);
+    assert(sent_len == 47U && sent[2] == 4U && sent[3] == 2U);
     assert(sent[4] == 3U && sent[5] == 1U && sent[6] == 2U && sent[7] == 1U);
     assert((uint16_t)(sent[8] | ((uint16_t)sent[9] << 8U)) == flow);
-    assert(sent[10] == 26U && sent[11] == 8U);
-    assert(crc16(&sent[2], 35U) == (uint16_t)(sent[37] | ((uint16_t)sent[38] << 8U)));
+    assert(sent[10] == 34U && sent[11] == 0x18U);
+    assert(crc16(&sent[2], 43U) == (uint16_t)(sent[45] | ((uint16_t)sent[46] << 8U)));
     for (index = 20U; index < 29U; index++) { assert(sent[index] == 0xFFU); }
     if (valid)
     {
@@ -492,7 +529,7 @@ static void test_window_strict_address_payload_and_crc(void)
         {2U,1U,2U,1U,2U,1U}, {2U,1U,3U,2U,2U,1U},
         {2U,1U,3U,1U,0U,1U}, {2U,1U,3U,1U,1U,1U},
         {2U,1U,3U,1U,3U,1U}, {2U,1U,3U,1U,2U,0U},
-        {2U,1U,3U,1U,2U,2U}
+        {2U,1U,3U,1U,2U,5U}
     };
     unsigned i;
     reset(0U); process(0U); process(20U);
@@ -694,8 +731,72 @@ static void test_window_timed_stop_and_stop_failure_preserve_telemetry(void)
     assert(pwm_start_calls == 1U && pwm_update_calls == 2U && pwm_stop_calls == 1U);
 }
 
+static void test_four_window_ids_and_cross_id_duplicates(void)
+{
+    uint8_t id;
+    reset(0U); process(0U); process(20U);
+    for (id = 1U; id <= 4U; id++)
+    {
+        uint32_t start = 21U + (id - 1U) * 60U;
+        tick = start;
+        window_frame(id, 2U, 1U, 3U, 1U, 2U, id, id & 1U, 0U);
+        process(start);
+        assert(SlaveServoTest_GetDiagnostics(id)->state == SLAVE_SERVO_TEST_MANUAL_RUNNING);
+        assert(SlaveServoTest_GetDiagnostics(id)->pulse_us == ((id & 1U) ? 1700U : 1300U));
+        process(start + 50U); assert_window_ack(id, 0U);
+    }
+    assert(pwm_pulse == 1700U && extra_pulses[0] == 1300U);
+    assert(extra_pulses[1] == 1700U && extra_pulses[2] == 1300U);
+    reset(0U); process(20U); tick = 21U;
+    window_frame(100U, 2U, 1U, 3U, 1U, 2U, 2U, 1U, 0U); process(21U);
+    tick = 22U;
+    window_frame(100U, 2U, 1U, 3U, 1U, 2U, 3U, 1U, 0U); process(22U);
+    assert(extra_pulses[0] == 1700U && extra_pulses[1] == 1500U);
+    assert(SlaveRuntimeDiag.duplicate_request_count == 0U);
+    assert(SlaveRuntimeDiag.ignored_message_count == 1U);
+    process(72U); assert_window_ack(100U, 0U);
+}
+
+static uint16_t mq2_u16(unsigned offset)
+{ return (uint16_t)(sent[offset] | ((uint16_t)sent[offset + 1U] << 8U)); }
+static void test_mq2_source_age_duplicates_fault_and_wrap(void)
+{
+    reset(0U);
+    process(0U); process(20U);
+    SlaveMq2Diag.valid = 1U;
+    mq2_sample.raw = 0U; mq2_sample.pa7_mv = 0U; mq2_sample.ao_mv = 0U; mq2_sample.tick = tick;
+    tick = 21U; request(800U, 0U, 0U, 0U); process(tick); process(71U);
+    assert(sent_len == 47U && mq2_u16(37U) == 0U && mq2_u16(43U) == 51U);
+    tick = 100U; mq2_sample.raw = 4095U; mq2_sample.tick = tick;
+    request(800U, 0U, 0U, 0U); process(tick); process(150U);
+    assert(mq2_u16(37U) == 0U && mq2_u16(43U) == 130U);
+    tick = 1970U; mq2_sample.tick = tick;
+    request(800U, 0U, 0U, 0U); process(tick); process(2020U);
+    assert(mq2_u16(37U) == 0xFFFFU && mq2_u16(43U) == 0xFFFFU);
+    assert(crc16(&sent[2], 43U) == mq2_u16(45U));
+
+    reset(0U); process(0U); process(20U); SlaveMq2Diag.valid = 1U; mq2_sample.tick = tick;
+    tick = 21U; request(801U, 0U, 0U, 0U); process(tick);
+    tx_fail = 1U; process(71U);
+    assert(sent_count == 0U);
+    /* A recovered ADC fault must still invalidate the staged pre-fault sample. */
+    SlaveMq2Diag.error_count++; mq2_sample.tick = 75U;
+    tx_fail = 0U; process(81U);
+    assert(mq2_u16(37U) == 0xFFFFU && mq2_u16(39U) == 0xFFFFU);
+    assert(crc16(&sent[2], 43U) == mq2_u16(45U));
+
+    reset(0xFFFFFFC0U); process(tick); process(tick + 20U); tick = 0xFFFFFFF0U;
+    SlaveMq2Diag.valid = 1U; mq2_sample.tick = tick;
+    mq2_sample.raw = 4095U; mq2_sample.pa7_mv = 3300U; mq2_sample.ao_mv = 6600U;
+    request(802U, 0U, 0U, 0U); process(tick); process(34U);
+    assert(mq2_u16(37U) == 4095U && mq2_u16(39U) == 3300U && mq2_u16(41U) == 6600U);
+    assert(mq2_u16(43U) == 50U);
+}
+
 int main(void)
 {
+    test_mq2_source_age_duplicates_fault_and_wrap();
+    test_four_window_ids_and_cross_id_duplicates();
     test_sensor_vector_cache_and_address();
     test_init_failures_and_reconnect();
     test_conversion_timeout_and_tick_wrap();
@@ -717,6 +818,6 @@ int main(void)
     test_window_driver_failure_and_bounded_uart_retry();
     test_window_ack_tick_wrap_and_late_audio_expiry();
     test_window_timed_stop_and_stop_failure_preserve_telemetry();
-    puts("21 slave BME/I2C/runtime/audio-upload/timed-window test groups passed");
+    puts("23 slave BME/I2C/runtime/MQ2/audio/window groups passed");
     return 0;
 }

@@ -33,6 +33,41 @@ extern I2C_TypeDef fake_i2c1;
 #define __HAL_RCC_GPIOB_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_I2C1_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_I2C1_CLK_DISABLE() ((void)0)
+/* ADC-specific HAL substitute, only used by test_mq2_adc.c. */
+typedef struct { uint32_t SR, DR; } ADC_TypeDef;
+typedef struct { uint32_t ScanConvMode, ContinuousConvMode, DiscontinuousConvMode,
+    ExternalTrigConv, DataAlign, NbrOfConversion; } ADC_InitTypeDef;
+typedef struct { ADC_TypeDef *Instance; ADC_InitTypeDef Init; uint32_t ErrorCode; } ADC_HandleTypeDef;
+typedef struct { uint32_t Channel, Rank, SamplingTime; } ADC_ChannelConfTypeDef;
+typedef struct { uint32_t PeriphClockSelection, AdcClockSelection; } RCC_PeriphCLKInitTypeDef;
+extern ADC_TypeDef fake_adc1;
+#define ADC1 (&fake_adc1)
+#define GPIOA ((void *)2)
+#define GPIO_MODE_ANALOG 5U
+#define DISABLE 0U
+#define ADC_SCAN_DISABLE 0U
+#define ADC_SOFTWARE_START 1U
+#define ADC_DATAALIGN_RIGHT 0U
+#define ADC_CHANNEL_7 7U
+#define ADC_REGULAR_RANK_1 1U
+#define ADC_SAMPLETIME_239CYCLES_5 239U
+#define RCC_PERIPHCLK_ADC 4U
+#define RCC_ADCPCLK2_DIV6 6U
+#define ADC_FLAG_EOC 2U
+#define HAL_ADC_ERROR_NONE 0U
+#define __HAL_RCC_GPIOA_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_ADC1_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_ADC1_FORCE_RESET() ((void)0)
+#define __HAL_RCC_ADC1_RELEASE_RESET() ((void)0)
+#define __HAL_ADC_GET_FLAG(h, f) ((h)->Instance->SR & (f))
+HAL_StatusTypeDef HAL_RCCEx_PeriphCLKConfig(RCC_PeriphCLKInitTypeDef *);
+HAL_StatusTypeDef HAL_ADC_Init(ADC_HandleTypeDef *);
+HAL_StatusTypeDef HAL_ADC_ConfigChannel(ADC_HandleTypeDef *, ADC_ChannelConfTypeDef *);
+HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *);
+HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *);
+HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *);
+uint32_t HAL_ADC_GetValue(ADC_HandleTypeDef *);
+uint32_t HAL_ADC_GetError(ADC_HandleTypeDef *);
 uint32_t HAL_GetTick(void);
 void HAL_Delay(uint32_t delay);
 HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *handle);

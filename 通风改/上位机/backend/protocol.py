@@ -24,13 +24,16 @@ class LoRaProtocol:
 
     LEGACY_TELEMETRY_SIZE = 18
     TELEMETRY_SIZE = 26
+    MQ2_TELEMETRY_SIZE = 34
+    MQ2_MAX_AGE_MS = 2000
     FLAG_MASTER_BME = 0x01
     FLAG_DUAL_BME = 0x02
     FLAG_SLAVE_ONLINE = 0x04
     FLAG_ACOUSTIC_EXTENSION = 0x08
     SINGLE_GROUP = 1
-    FAN_CHANNELS = (1, 2)
+    FAN_CHANNELS = (1, 2, 3, 4)
     WINDOW_SERVO = 1
+    WINDOW_SERVOS = (1, 2, 3, 4)
     WINDOW_ACTIONS = (0, 1)
 
     TEMPERATURE_INVALID = -32768
@@ -116,7 +119,7 @@ class LoRaProtocol:
                 cls.SINGLE_GROUP,
             )
         elif msg_type == cls.MSG_SET_WINDOW:
-            valid = (len(payload) == 2 and payload[0] == cls.WINDOW_SERVO
+            valid = (len(payload) == 2 and payload[0] in cls.WINDOW_SERVOS
                      and payload[1] in cls.WINDOW_ACTIONS)
             direction = source == (cls.ROLE_CONTROL, 0) and target == (
                 cls.ROLE_MASTER,
@@ -185,7 +188,7 @@ class LoRaProtocol:
     @classmethod
     def cmd_set_fan_speed(cls, flow_id: int, channel: int, duty: int) -> bytes:
         if channel not in cls.FAN_CHANNELS:
-            raise ValueError("fan channel must be 1 or 2")
+            raise ValueError("fan channel must be 1..4")
         if not 0 <= duty <= 100:
             raise ValueError("fan duty must be 0..100")
         return cls.build_packet(
@@ -199,9 +202,11 @@ class LoRaProtocol:
         )
 
     @classmethod
-    def cmd_set_window(cls, flow_id: int, action: int) -> bytes:
+    def cmd_set_window(cls, flow_id: int, action: int, servo_id: int = 1) -> bytes:
         if type(action) is not int or action not in cls.WINDOW_ACTIONS:
             raise ValueError("window action must be 0 (close) or 1 (open)")
+        if type(servo_id) is not int or servo_id not in cls.WINDOW_SERVOS:
+            raise ValueError("servo id must be 1..4")
         return cls.build_packet(
             cls.MSG_SET_WINDOW,
             cls.ROLE_CONTROL,
@@ -209,7 +214,7 @@ class LoRaProtocol:
             cls.ROLE_MASTER,
             cls.SINGLE_GROUP,
             flow_id,
-            bytes((cls.WINDOW_SERVO, action)),
+            bytes((servo_id, action)),
         )
 
     @classmethod
@@ -234,6 +239,12 @@ class LoRaProtocol:
             valid = payload[0] in (0x00, 0x01, 0x03, 0x07)
         elif len(payload) == cls.TELEMETRY_SIZE:
             valid = payload[0] in (0x0B, 0x0F)
+        elif len(payload) == cls.MQ2_TELEMETRY_SIZE:
+            valid = payload[0] in (0x1B, 0x1F)
+            raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
+            if (raw, pa7_mv, ao_mv, age_ms) != (cls.UINT16_INVALID,) * 4:
+                valid = valid and (raw <= 4095 and pa7_mv <= 3600
+                                   and ao_mv <= 7200 and age_ms < cls.MQ2_MAX_AGE_MS)
         else:
             raise ValueError("invalid telemetry payload length")
         if not valid:
@@ -242,7 +253,7 @@ class LoRaProtocol:
     @classmethod
     def decode_telemetry(cls, payload: bytes) -> dict:
         cls._validate_telemetry_payload(payload)
-        extended = len(payload) == cls.TELEMETRY_SIZE
+        extended = len(payload) in (cls.TELEMETRY_SIZE, cls.MQ2_TELEMETRY_SIZE)
         # Decode the historical wire slots first; replace them for dual BME.
         values = struct.unpack("<BhHIHHBhH", payload[:cls.LEGACY_TELEMETRY_SIZE])
 
@@ -264,10 +275,11 @@ class LoRaProtocol:
             "sound_rms_1": u16(values[4]),
             "sound_rms_2": u16(values[5]),
             "rain_state": None if values[6] == cls.RAIN_INVALID else values[6],
+            "rain_source": None,
             "master_temperature_c": temperature(values[7]),
             "master_humidity_pct": humidity(values[8]),
         }
-        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F)
+        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F, 0x1B, 0x1F)
         master_bme = decoded["flags"] == cls.FLAG_MASTER_BME or dual_bme
         decoded.update(
             master_bme_temperature_c=decoded["slave_temperature_c"] if master_bme else None,
@@ -289,12 +301,23 @@ class LoRaProtocol:
                 sound_rms_1=None, sound_rms_2=None, rain_state=None,
                 master_temperature_c=None, master_humidity_pct=None,
             )
+            if extended:
+                # Only this layout owns PA11 rain; slave link state is unrelated.
+                rain = payload[17]
+                decoded.update(rain_state=rain if rain in (0, 1) else None,
+                               rain_source="master")
             if extended and online:
                 sound_left, sound_right = struct.unpack_from("<II", payload, 18)
                 decoded.update(
                     sound_rms_1=None if sound_left == cls.UINT32_INVALID else sound_left,
                     sound_rms_2=None if sound_right == cls.UINT32_INVALID else sound_right,
                 )
+        decoded["mq2"] = dict(valid=False, raw=None, pa7_mv=None, ao_mv=None, age_ms=None)
+        if len(payload) == cls.MQ2_TELEMETRY_SIZE and decoded["slave_online"]:
+            raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
+            if raw != cls.UINT16_INVALID:
+                decoded["mq2"] = dict(valid=True, raw=raw, pa7_mv=pa7_mv,
+                                      ao_mv=ao_mv, age_ms=age_ms)
         return decoded
 
 

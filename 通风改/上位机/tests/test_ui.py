@@ -102,9 +102,16 @@ class MonitorLayoutTests(unittest.TestCase):
                         self.assertEqual(app.control_panel.grid_info()["row"], 0 if wide_enough else 1)
                         self.assertTrue(app.log.winfo_ismapped())
                         self.assertTrue(app.telemetry_button.winfo_ismapped())
-                        if scale == 1.0 and (width, height) == (1120, 800):
-                            self.assertLessEqual(app.dashboard_content.winfo_height(),
-                                                 app.dashboard_canvas.winfo_height())
+                        if app.dashboard_content.winfo_height() > app.dashboard_canvas.winfo_height():
+                            app.dashboard_canvas.yview_moveto(1.0)
+                            app.update()
+                            self.assertGreaterEqual(app.dashboard_canvas.yview()[1], 0.999)
+                            self.assertLessEqual(
+                                max(widget.winfo_rooty() + widget.winfo_height()
+                                    for widget in descendants(app.dashboard_content)),
+                                app.dashboard_canvas.winfo_rooty() + app.dashboard_canvas.winfo_height())
+                            app.dashboard_canvas.yview_moveto(0.0)
+                            app.update()
                         log_font = tkfont.Font(root=app, font=app.log.cget("font"))
                         log_padding = 2 * app.log.winfo_pixels(app.log.cget("pady"))
                         self.assertGreaterEqual(app.log.winfo_height(),
@@ -129,6 +136,7 @@ class MonitorLayoutTests(unittest.TestCase):
                     app.value_vars[name].set(f"{value} {unit}")
                 app.sound_vars["sound_rms_1"].set("0")
                 app.sound_vars["sound_rms_2"].set("4294967294")
+                app.rain_var.set("有雨")
                 app.window_status_var.set("开窗启动PWM已确认（完成/停止状态未知）")
                 app.slave_link_var.set("从机链路：未知（旧布局）")
                 for variable in app.fan_status_vars.values():
@@ -136,7 +144,7 @@ class MonitorLayoutTests(unittest.TestCase):
                 app.update()
                 self.assert_dashboard_fits_horizontally(app)
                 for variable in (*app.value_vars.values(), *app.sound_vars.values(),
-                                 app.window_status_var, app.slave_link_var):
+                                 app.rain_var, app.window_status_var, app.slave_link_var):
                     labels = [widget for widget in descendants(app.dashboard_content)
                               if isinstance(widget, UPPER.ttk.Label)
                               and str(widget.cget("textvariable")) == str(variable)]
@@ -146,6 +154,7 @@ class MonitorLayoutTests(unittest.TestCase):
                 app.update()
                 self.assertTrue(all(variable.get() == "--" for variable in app.value_vars.values()))
                 self.assertTrue(all(variable.get() == "--" for variable in app.sound_vars.values()))
+                self.assertEqual(app.rain_var.get(), "--")
                 self.assert_dashboard_fits_horizontally(app)
 
     def test_control_callbacks_keep_channels_actions_and_release_behavior(self):
@@ -154,7 +163,7 @@ class MonitorLayoutTests(unittest.TestCase):
             app._set_window = Mock()
             scales = [widget for widget in descendants(app.control_panel)
                       if isinstance(widget, UPPER.ttk.Scale)]
-            self.assertEqual(len(scales), 2)
+            self.assertEqual(len(scales), 4)
             for channel in app.FAN_PINS:
                 slider = next(widget for widget in scales
                               if str(widget.cget("variable")) == str(app.duty_vars[channel]))

@@ -5,6 +5,22 @@
 
 #define LORA_PROTOCOL_FIXED_CRC_INPUT_SIZE (9U)
 
+static uint8_t ValidateMq2(const uint8_t *payload)
+{
+    uint16_t value[4];
+    uint8_t i;
+    for (i = 0U; i < 4U; i++)
+    {
+        uint8_t offset = (uint8_t)(LORA_TELEMETRY_MQ2_OFFSET + 2U * i);
+        value[i] = (uint16_t)((uint16_t)payload[offset] |
+                             ((uint16_t)payload[offset + 1U] << 8U));
+    }
+    if ((value[0] == 0xFFFFU) && (value[1] == 0xFFFFU) &&
+        (value[2] == 0xFFFFU) && (value[3] == 0xFFFFU)) { return 1U; }
+    return ((value[0] <= 4095U) && (value[1] <= 3600U) &&
+            (value[2] <= 7200U) && (value[3] < LORA_TELEMETRY_MQ2_MAX_AGE_MS)) ? 1U : 0U;
+}
+
 static LoRaProtocolStatus ValidateAddress(uint8_t role, uint8_t group)
 {
     if ((role < (uint8_t)LORA_ROLE_CONTROL_ROOM) ||
@@ -44,15 +60,21 @@ static LoRaProtocolStatus ValidateShape(const LoRaMessage *message)
 
         case (uint8_t)LORA_MSG_TELEMETRY:
             if ((message->payload_length != LORA_PROTOCOL_TELEMETRY_SIZE) &&
+                (message->payload_length != LORA_PROTOCOL_MQ2_TELEMETRY_SIZE) &&
                 (message->payload_length != LORA_PROTOCOL_LEGACY_TELEMETRY_SIZE))
             {
                 return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH;
             }
+            if ((message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE) &&
+                (ValidateMq2(message->payload) == 0U))
+            { return LORA_PROTOCOL_INVALID_PAYLOAD_VALUE; }
             if ((message->source_role == (uint8_t)LORA_ROLE_SLAVE) &&
                 (message->destination_role == (uint8_t)LORA_ROLE_MASTER))
             {
                 uint8_t expected_flags = (message->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE) ?
                     LORA_TELEMETRY_FLAG_ACOUSTIC : 0U;
+                if (message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE)
+                { expected_flags = LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2; }
                 return (message->payload[0] == expected_flags) ?
                     LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
             }
@@ -60,6 +82,11 @@ static LoRaProtocolStatus ValidateShape(const LoRaMessage *message)
                 (message->destination_role == (uint8_t)LORA_ROLE_CONTROL_ROOM))
             {
                 uint8_t flags = message->payload[0];
+                if (message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE)
+                {
+                    return ((flags == 0x1BU) || (flags == 0x1FU)) ?
+                        LORA_PROTOCOL_OK : LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;
+                }
                 if (message->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE)
                 {
                     return ((flags == 0x0BU) || (flags == 0x0FU)) ?
@@ -89,7 +116,7 @@ static LoRaProtocolStatus ValidateShape(const LoRaMessage *message)
             {
                 return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH;
             }
-            if ((message->payload[0] != LORA_WINDOW_SERVO_ID) ||
+            if ((message->payload[0] < 1U) || (message->payload[0] > LORA_WINDOW_SERVO_COUNT) ||
                 (message->payload[1] > 1U))
             {
                 return LORA_PROTOCOL_INVALID_PAYLOAD_VALUE;

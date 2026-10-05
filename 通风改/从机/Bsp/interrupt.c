@@ -2,6 +2,7 @@
 
 #include "slave_protocol_runtime.h"
 #include "usart.h"
+#include "esp_at_uart.h"
 
 volatile uint16_t time_100ms;
 volatile uint8_t Rx2Buffer[100];
@@ -18,6 +19,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *handle)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *handle)
 {
+    if (handle->Instance == USART1)
+    {
+        EspAtUart_RxCompleteFromIsr();
+        return;
+    }
     if (handle->Instance == USART2)
     {
         if (SlaveRuntime_IsApplicationMode() != 0U)
@@ -30,4 +36,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *handle)
         }
         (void)HAL_UART_Receive_IT(&huart2, &rx2_data, 1U);
     }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *handle)
+{
+    if (handle->Instance == USART1) { EspAtUart_TxCompleteFromIsr(); }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *handle)
+{
+    if (handle->Instance == USART1) { EspAtUart_ErrorFromIsr(); }
 }

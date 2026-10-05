@@ -19,14 +19,16 @@ except ImportError:  # Pure protocol/controller tests do not require pyserial.
 
 
 class SerialEvent:
-    def __init__(self, generation: int, kind: str, value: object):
+    def __init__(self, generation: int, kind: str, value: object, received_at: float | None = None):
         self.generation = generation
         self.kind = kind
         self.value = value
+        self.received_at = received_at
 
 
 class Controller:
-    FAN_PINS = {1: "PB1", 2: "PB8"}
+    SERVO_PINS = {1: "PB8", 2: "PB9", 3: "PB10", 4: "PB11"}
+    FAN_PINS = {1: "PB1", 2: "PB8", 3: "PA1", 4: "PB9"}
     FAN_ACK_TIMEOUT_S = 8.0
     WINDOW_ACK_TIMEOUT_S = 8.0
     TELEMETRY_POLL_INTERVAL_S = 1.0
@@ -72,6 +74,10 @@ class Controller:
         self.port = ""
         self.values = {key: "--" for key, _, _ in self.FIELD_LABELS}
         self.sounds = {key: "--" for key in self.SOUND_KEYS}
+        self.rain = {"state": None, "source": None}
+        self.mq2 = self._empty_mq2()
+        self._mq2_received_at = None
+        self._mq2_source_age = None
         self.slave_link = "从机链路：未知"
         self.last_telemetry_at = None
         self.updated_at = None
@@ -82,6 +88,8 @@ class Controller:
         self.window_queued_action = None
         self.window_pending = None
         self.window_status = "未连接，位置未知"
+        self.window_servo_id = 1
+        self.window_statuses = {channel: self.window_status for channel in self.SERVO_PINS}
         self.next_telemetry_poll_at = 0.0
         self.logs: list[dict] = []
         self.notice = None
@@ -131,6 +139,7 @@ class Controller:
         self.window_queued_action = None
         self.window_pending = None
         self.window_status = "已连接，尚未发送，位置未知"
+        self.window_statuses = {channel: self.window_status for channel in self.SERVO_PINS}
         self.next_telemetry_poll_at = self.clock() + self.TELEMETRY_POLL_INTERVAL_S
         if self.start_readers:
             self.reader_thread = threading.Thread(
@@ -147,6 +156,8 @@ class Controller:
             self.window_status = "已断开，待发动作已取消"
         elif self.serial_port is not None:
             self.window_status = "已断开，位置未知"
+        self.window_statuses = {channel: "已断开，位置未知" for channel in self.SERVO_PINS}
+        self.window_statuses[self.window_servo_id] = self.window_status
         self.window_queued_action = None
         self.window_pending = None
         self.fan_pending.clear()
@@ -176,7 +187,7 @@ class Controller:
                 if stop.is_set():
                     break
                 for frame in parser.feed(chunk):
-                    self.events.put(SerialEvent(generation, "frame", frame))
+                    self.events.put(SerialEvent(generation, "frame", frame, self.clock()))
             except Exception as exc:
                 if not stop.is_set():
                     self.events.put(SerialEvent(generation, "error", str(exc)))
@@ -201,10 +212,30 @@ class Controller:
     def _clear_telemetry(self):
         self.values = {key: "--" for key in self.values}
         self.sounds = {key: "--" for key in self.sounds}
+        self.rain = {"state": None, "source": None}
+        self.mq2 = self._empty_mq2()
+        self._mq2_received_at = None
+        self._mq2_source_age = None
         self.slave_link = "从机链路：未知"
         self.last_telemetry_at = None
         self.updated_at = None
         self._changed()
+
+    @staticmethod
+    def _empty_mq2():
+        return dict(valid=False, raw=None, pa7_mv=None, ao_mv=None, age_ms=None)
+
+    def _refresh_mq2(self, now: float):
+        if not self.mq2["valid"]:
+            return
+        age = self._mq2_source_age + max(0, int((now - self._mq2_received_at) * 1000))
+        if age >= LoRaProtocol.MQ2_MAX_AGE_MS:
+            self.mq2 = self._empty_mq2()
+            self._mq2_received_at = self._mq2_source_age = None
+            self._changed()
+        elif age != self.mq2["age_ms"]:
+            self.mq2["age_ms"] = age
+            self._changed()
 
     def read_once(self):
         self._request_telemetry(True)
@@ -243,24 +274,30 @@ class Controller:
     def _window_action_text(action: int) -> str:
         return "开窗" if action == 1 else "关窗"
 
-    def set_window(self, action: int):
+    def set_window(self, action: int, servo_id: int = 1):
         if type(action) is not int or action not in LoRaProtocol.WINDOW_ACTIONS:
             raise ValueError("window action must be 0 or 1")
+        if type(servo_id) is not int or servo_id not in self.SERVO_PINS:
+            raise ValueError("servo id must be 1..4")
         if self.serial_port is None:
             self.window_status = "未连接，未发送"
+            self.window_statuses[servo_id] = self.window_status
             self._changed()
             return
         if self._window_busy():
             self._append_log("窗户命令等待完成，不重复发送")
             return
+        self.window_servo_id = servo_id
         self.window_queued_action = action
         self.window_status = f"{self._window_action_text(action)}等待前序请求"
+        self.window_statuses[servo_id] = self.window_status
         self._changed()
         self._service_window(self.clock())
 
     def _finish_window(self, text: str, now: float):
         self.window_pending = None
         self.window_status = text
+        self.window_statuses[self.window_servo_id] = text
         self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
         self._changed()
 
@@ -282,11 +319,12 @@ class Controller:
             return
         action, self.window_queued_action = self.window_queued_action, None
         flow = self._next_flow()
-        if self._send(LoRaProtocol.cmd_set_window(flow, action)):
+        if self._send(LoRaProtocol.cmd_set_window(flow, action, self.window_servo_id)):
             self.window_pending = (flow, action, self.clock())
             self.window_status = f"{self._window_action_text(action)}等待确认"
         else:
             self.window_status = f"{self._window_action_text(action)}发送失败，结果未知"
+        self.window_statuses[self.window_servo_id] = self.window_status
         self._changed()
 
     @staticmethod
@@ -329,7 +367,7 @@ class Controller:
             if event.generation != self.connection_generation:
                 continue
             if event.kind == "frame":
-                self._handle_frame(event.value)
+                self._handle_frame(event.value, event.received_at)
             else:
                 self._append_log("串口错误: " + str(event.value))
                 self.disconnect()
@@ -339,10 +377,11 @@ class Controller:
                 self.fan_status[channel] = f"{duty}% 确认超时"
                 self._changed()
         now = self.clock()
+        self._refresh_mq2(now)
         self._poll_telemetry(now)
         self._service_window(now)
 
-    def _handle_frame(self, frame: bytes):
+    def _handle_frame(self, frame: bytes, received_at: float | None = None):
         self._append_log("RX " + frame.hex(" ").upper())
         try:
             packet = LoRaProtocol.parse_packet(frame)
@@ -360,6 +399,12 @@ class Controller:
                 return
             self.telemetry_pending = None
             values = LoRaProtocol.decode_telemetry(packet["data"])
+            self.mq2 = dict(values["mq2"])
+            self._mq2_received_at = now if received_at is None else received_at
+            self._mq2_source_age = self.mq2["age_ms"]
+            self._refresh_mq2(now)
+            self.rain = {"state": values["rain_state"] if values["rain_source"] == "master" else None,
+                         "source": values["rain_source"]}
             online = values["slave_online"]
             self.slave_link = "从机链路：" + (
                 "未知（旧布局）" if online is None else "在线" if online else "离线")
@@ -370,7 +415,7 @@ class Controller:
                 value = values[name]
                 self.values[key] = "--" if value is None else f"{value:g} {unit}"
             for key in self.SOUND_KEYS:
-                value = values[key] if len(packet["data"]) == LoRaProtocol.TELEMETRY_SIZE else None
+                value = values[key] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE) else None
                 self.sounds[key] = "--" if value is None else str(value)
             self._changed()
         elif packet["type"] == LoRaProtocol.MSG_ACK:
@@ -420,10 +465,14 @@ class Controller:
             "controls": {"read_enabled": not busy, "fan_enabled": not busy,
                          "window_enabled": self.serial_port is not None and not busy},
             "telemetry": {"values": dict(self.values), "sounds": dict(self.sounds),
+                          "rain": dict(self.rain),
+                          "mq2": dict(self.mq2),
                           "slave_link": self.slave_link, "updated_at": self.updated_at},
             "fans": [{"channel": ch, "pin": pin, "duty": self.duties[ch],
                       "status": self.fan_status[ch]} for ch, pin in self.FAN_PINS.items()],
             "window": {"busy": busy, "status": self.window_status},
+            "windows": [{"channel": ch, "pin": pin, "status": self.window_statuses[ch]}
+                        for ch, pin in self.SERVO_PINS.items()],
             "logs": [dict(item) for item in self.logs if item["id"] > after_log_id],
             "last_log_id": len(self.logs), "notice": dict(self.notice) if self.notice else None,
         }

@@ -19,10 +19,13 @@
 #define MASTER_LIGHT_RETRY_MS                    (1000UL)
 #define MASTER_LIGHT_WHITE_LEVEL                 (51U)
 
-/* PB0 雨滴输入：低电平表示 LM393 已检测到雨滴。 */
+/* PA11 rain DO: active low, independent of fans/window/light control. */
+#define MASTER_RAIN_DO_PORT                     GPIOA
+#define MASTER_RAIN_DO_PIN                      GPIO_PIN_11
 #define MASTER_RAIN_ASSERT_MS                   (200UL)
 
 #define MASTER_RAIN_CLEAR_MS                    (3000UL)
+#define MASTER_RAIN_SAMPLE_FRESH_MS              (2000UL)
 #define MASTER_DEFAULT_TARGET_TEMP_X10           (260)
 #define MASTER_DEFAULT_TARGET_HUMIDITY_X10       (300U)
 #define MASTER_MIN_TARGET_TEMP_X10               (-550)

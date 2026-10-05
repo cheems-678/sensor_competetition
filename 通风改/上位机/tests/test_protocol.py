@@ -15,17 +15,17 @@ SPEC.loader.exec_module(UPPER)
 
 class ProtocolV4Tests(unittest.TestCase):
     def test_all_fan_channels_and_duty_boundaries(self):
-        for channel in (1, 2):
+        for channel in (1, 2, 3, 4):
             for duty in (0, 1, 25, 50, 75, 99, 100):
                 packet = UPPER.LoRaProtocol.parse_packet(
                     UPPER.LoRaProtocol.cmd_set_fan_speed(5, channel, duty))
                 self.assertEqual(packet["data"], bytes((channel, duty)))
-        for channel, duty in ((0, 50), (3, 0), (3, 100), (4, 0), (4, 100), (5, 50), (1, -1), (1, 101)):
+        for channel, duty in ((0, 50), (5, 50), (1, -1), (1, 101)):
             with self.assertRaises(ValueError):
                 UPPER.LoRaProtocol.cmd_set_fan_speed(1, channel, duty)
 
     def test_invalid_fan_is_rejected_when_parsing(self):
-        for channel in (0, 3, 4, 5):
+        for channel in (0, 5):
             frame = UPPER.LoRaProtocol.build_packet(0x10, 1, 0, 2, 1, 1, bytes((channel, 100)))
             with self.assertRaisesRegex(ValueError, "payload"):
                 UPPER.LoRaProtocol.parse_packet(frame)
@@ -55,7 +55,10 @@ class ProtocolV4Tests(unittest.TestCase):
         decoded = UPPER.LoRaProtocol.decode_telemetry(payload)
         self.assertEqual(decoded["flags"], 0)
         for key, value in decoded.items():
-            if key != "flags":
+            if key == "mq2":
+                self.assertFalse(value["valid"])
+                self.assertTrue(all(item is None for name, item in value.items() if name != "valid"))
+            elif key != "flags":
                 self.assertIsNone(value, key)
 
     def test_master_telemetry_frame_is_31_bytes(self):
@@ -100,8 +103,12 @@ def bind_window_controls(app):
     app.window_queued_action = None
     app.window_pending = None
     app.window_status_var = ValueStub("未发送")
+    app.window_servo_id = 1
+    app.window_selection = ValueStub("1 / PB8")
+    app.window_selector = Mock()
+    app.window_statuses = {channel: "未发送" for channel in (1, 2, 3, 4)}
     app.window_buttons = {action: Mock() for action in (0, 1)}
-    app.fan_send_buttons = {channel: Mock() for channel in (1, 2)}
+    app.fan_send_buttons = {channel: Mock() for channel in (1, 2, 3, 4)}
     app.telemetry_button = Mock()
     app.WINDOW_ACK_TIMEOUT_S = UPPER.MonitorApp.WINDOW_ACK_TIMEOUT_S
     app._window_action_text = UPPER.MonitorApp._window_action_text
@@ -114,8 +121,8 @@ class FanControlTests(unittest.TestCase):
     def setUp(self):
         self.app = SimpleNamespace(
             serial_port=Mock(),
-            duty_vars={channel: ValueStub(25.6) for channel in (1, 2)},
-            fan_status_vars={channel: ValueStub("未发送") for channel in (1, 2)},
+            duty_vars={channel: ValueStub(25.6) for channel in (1, 2, 3, 4)},
+            fan_status_vars={channel: ValueStub("未发送") for channel in (1, 2, 3, 4)},
             fan_pending={},
             telemetry_pending=None,
             _normalize_fan_duty=UPPER.MonitorApp._normalize_fan_duty,
@@ -144,16 +151,16 @@ class FanControlTests(unittest.TestCase):
         self.assertFalse(self.app.fan_pending)
 
     def test_active_fan_mapping_and_invalid_channel(self):
-        self.assertEqual(UPPER.MonitorApp.FAN_PINS, {1: "PB1", 2: "PB8"})
+        self.assertEqual(UPPER.MonitorApp.FAN_PINS, {1: "PB1", 2: "PB8", 3: "PA1", 4: "PB9"})
         self.assertEqual(tuple(UPPER.MonitorApp.FAN_PINS), UPPER.LoRaProtocol.FAN_CHANNELS)
-        for channel in (0, 3, 4, 5):
+        for channel in (0, 5):
             with patch.object(UPPER.messagebox, "showwarning"):
                 UPPER.MonitorApp._set_fan(self.app, channel)
         self.app._send.assert_not_called()
         self.assertFalse(self.app.fan_pending)
 
     def test_each_active_slider_keeps_its_channel_number(self):
-        for channel in (1, 2):
+        for channel in (1, 2, 3, 4):
             previous = {key: value.get() for key, value in self.app.duty_vars.items()}
             UPPER.MonitorApp._preview_fan(self.app, channel, "100")
             UPPER.MonitorApp._set_fan(self.app, channel)
@@ -270,13 +277,17 @@ class TelemetryPollingTests(unittest.TestCase):
             SOUND_HELP_TEXT=UPPER.MonitorApp.SOUND_HELP_TEXT,
             value_vars={name: ValueStub("old") for name, _, _ in UPPER.MonitorApp.FIELD_LABELS},
             sound_vars={name: ValueStub("old") for name, _ in UPPER.MonitorApp.SOUND_LABELS},
+            rain_var=ValueStub("old"),
+            MQ2_LABELS=UPPER.MonitorApp.MQ2_LABELS,
+            mq2_vars={name: ValueStub("--") for name, _, _ in UPPER.MonitorApp.MQ2_LABELS},
+            mq2=dict(valid=False), _mq2_received_at=None, _mq2_source_age=None,
             slave_link_var=ValueStub("old"),
             last_telemetry_at=99.0,
-            fan_status_vars={channel: ValueStub("ready") for channel in (1, 2)},
+            fan_status_vars={channel: ValueStub("ready") for channel in (1, 2, 3, 4)},
             _next_flow=Mock(side_effect=range(1, 100)), _send=Mock(return_value=True),
             _append_log=Mock(), database=Mock(), stop_event=Mock(), connect_button=Mock(),
         )
-        for name in ("_request_telemetry", "_poll_telemetry", "_clear_telemetry", "_handle_frame", "_disconnect"):
+        for name in ("_request_telemetry", "_poll_telemetry", "_clear_telemetry", "_handle_frame", "_disconnect", "_refresh_mq2"):
             setattr(self.app, name, MethodType(getattr(UPPER.MonitorApp, name), self.app))
         bind_window_controls(self.app)
 
@@ -460,9 +471,9 @@ class DualBmeProtocolTests(unittest.TestCase):
             database.close()
 
 
-def acoustic_payload(flags=0x0F, left=123456, right=98765):
+def acoustic_payload(flags=0x0F, left=123456, right=98765, rain=0xFF):
     return struct.pack("<BhHIhHIBII", flags, -55, 654, 101325,
-                       -123, 456, 100000, 0xFF, left, right)
+                       -123, 456, 100000, rain, left, right)
 
 
 class AcousticProtocolTests(unittest.TestCase):
@@ -546,6 +557,108 @@ class AcousticProtocolTests(unittest.TestCase):
             self.assertEqual(len(before), 13)
         finally:
             database.close()
+
+
+class RainProtocolTests(unittest.TestCase):
+    def test_extended_rain_three_states_and_invalid_codes_do_not_change_bme(self):
+        for flags in (0x0B, 0x0F):
+            for rain in (0, 1, 0xFF, 2, 127, 254):
+                with self.subTest(flags=flags, rain=rain):
+                    frame = telemetry_frame(payload=acoustic_payload(flags=flags, rain=rain))
+                    packet = UPPER.LoRaProtocol.parse_packet(frame)
+                    values = UPPER.LoRaProtocol.decode_telemetry(packet["data"])
+                    self.assertEqual(len(frame), 39)
+                    self.assertEqual(packet["data"][17], rain)
+                    self.assertEqual(values["rain_source"], "master")
+                    self.assertEqual(values["rain_state"], rain if rain in (0, 1) else None)
+                    self.assertEqual(values["master_bme_temperature_c"], -5.5)
+                    self.assertEqual(values["slave_online"], flags == 0x0F)
+
+    def test_old_eighteen_byte_rain_keeps_historical_value_without_master_source(self):
+        for flags in (0, 1):
+            for rain in (0, 1, 2, 0xFF):
+                payload = bytearray(master_bme_payload(flags=flags))
+                payload[13] = rain
+                values = UPPER.LoRaProtocol.decode_telemetry(bytes(payload))
+                self.assertEqual(values["rain_state"], None if rain == 0xFF else rain)
+                self.assertIsNone(values["rain_source"])
+        for flags in (3, 7):
+            payload = bytearray(dual_bme_payload(flags=flags))
+            payload[17] = 1
+            values = UPPER.LoRaProtocol.decode_telemetry(bytes(payload))
+            self.assertIsNone(values["rain_state"])
+            self.assertIsNone(values["rain_source"])
+
+    def test_rain_reuses_database_column_and_raw_frame_preserves_source(self):
+        database = UPPER.TelemetryDatabase(":memory:")
+        try:
+            before = database.connection.execute("PRAGMA table_info(telemetry_v4)").fetchall()
+            payloads = [acoustic_payload(rain=rain) for rain in (0, 1, 0xFF, 2)]
+            historical = bytearray(master_bme_payload(flags=0))
+            historical[13] = 1
+            payloads.append(bytes(historical))
+            for flow, payload in enumerate(payloads):
+                frame = telemetry_frame(flow=flow, payload=payload)
+                database.insert(flow, UPPER.LoRaProtocol.decode_telemetry(payload), frame)
+            rows = database.connection.execute(
+                "SELECT rain_state, raw_frame FROM telemetry_v4 ORDER BY id").fetchall()
+            self.assertEqual([row[0] for row in rows], [0, 1, None, None, 1])
+            for index, (_, raw) in enumerate(rows):
+                values = UPPER.LoRaProtocol.decode_telemetry(
+                    UPPER.LoRaProtocol.parse_packet(bytes.fromhex(raw))["data"])
+                self.assertEqual(values["rain_source"], "master" if index < 4 else None)
+            self.assertEqual(database.connection.execute("PRAGMA table_info(telemetry_v4)").fetchall(), before)
+            self.assertEqual(len(before), 13)
+        finally:
+            database.close()
+
+
+class RainDisplayTests(unittest.TestCase):
+    setUp = TelemetryPollingTests.setUp
+
+    def receive(self, rain, flags=0x0F, flow=1):
+        self.app.telemetry_pending = (flow, 100.0)
+        self.app._handle_frame(telemetry_frame(flow=flow, payload=acoustic_payload(flags=flags, rain=rain)))
+
+    def test_rain_display_three_states_and_offline_slave_are_independent(self):
+        for rain, text in ((0, "无雨"), (1, "有雨"), (0xFF, "--"), (2, "--")):
+            for flags in (0x0B, 0x0F):
+                self.receive(rain, flags)
+                self.assertEqual(self.app.rain_var.get(), text)
+                self.assertEqual(self.app.value_vars["master_bme_pressure_pa"].get(), "101325 Pa")
+        self.app._send.assert_not_called()
+
+    def test_old_frame_clears_master_rain_display_without_changing_stored_history(self):
+        self.receive(1)
+        payload = bytearray(master_bme_payload(flags=0))
+        payload[13] = 1
+        self.app.telemetry_pending = (2, 100.0)
+        self.app._handle_frame(telemetry_frame(flow=2, payload=bytes(payload)))
+        self.assertEqual(self.app.rain_var.get(), "--")
+        self.assertEqual(self.app.database.insert.call_args.args[1]["rain_state"], 1)
+        self.assertIsNone(self.app.database.insert.call_args.args[1]["rain_source"])
+
+    def test_unmatched_duplicate_late_timeout_error_and_disconnect_rain_behavior(self):
+        self.receive(1)
+        self.app.telemetry_pending = (2, 100.0)
+        self.app._handle_frame(telemetry_frame(flow=1, payload=acoustic_payload(rain=0)))
+        self.assertEqual(self.app.rain_var.get(), "有雨")
+        self.assertEqual(self.app.database.insert.call_count, 1)
+        with patch.object(UPPER.time, "monotonic", return_value=105.0):
+            self.app._handle_frame(telemetry_frame(flow=2, payload=acoustic_payload(rain=0)))
+        self.assertEqual(self.app.rain_var.get(), "--")
+        self.assertEqual(self.app.database.insert.call_count, 1)
+        self.receive(1, flow=3)
+        self.app.telemetry_pending = (4, 100.0)
+        self.app._poll_telemetry(105.0)
+        self.assertEqual(self.app.rain_var.get(), "--")
+        self.receive(1, flow=5)
+        self.app.telemetry_pending = (6, 100.0)
+        self.app._handle_frame(UPPER.LoRaProtocol.build_packet(0x7E, 2, 1, 1, 0, 6, b"\x07"))
+        self.assertEqual(self.app.rain_var.get(), "--")
+        self.receive(1, flow=7)
+        self.app._disconnect()
+        self.assertEqual(self.app.rain_var.get(), "--")
 
 
 class AcousticDisplayTests(unittest.TestCase):
@@ -691,7 +804,7 @@ class WindowProtocolTests(unittest.TestCase):
         for action in (-1, 2, 255, "1", None, 1.0, True):
             with self.assertRaises(ValueError):
                 UPPER.LoRaProtocol.cmd_set_window(1, action)
-        for payload in (b"", b"\x01", b"\x01\x00\x00", b"\x00\x01", b"\x02\x01", b"\x01\x02"):
+        for payload in (b"", b"\x01", b"\x01\x00\x00", b"\x00\x01", b"\x05\x01", b"\x01\x02"):
             frame = UPPER.LoRaProtocol.build_packet(0x11, 1, 0, 2, 1, 1, payload)
             with self.assertRaisesRegex(ValueError, "payload"):
                 UPPER.LoRaProtocol.parse_packet(frame)
@@ -699,6 +812,15 @@ class WindowProtocolTests(unittest.TestCase):
             frame = UPPER.LoRaProtocol.build_packet(0x11, *addresses, 1, b"\x01\x01")
             with self.assertRaisesRegex(ValueError, "direction"):
                 UPPER.LoRaProtocol.parse_packet(frame)
+
+    def test_four_servo_ids_and_invalid_id_types(self):
+        for servo_id in (1, 2, 3, 4):
+            for action in (0, 1):
+                frame = UPPER.LoRaProtocol.cmd_set_window(99, action, servo_id)
+                self.assertEqual(UPPER.LoRaProtocol.parse_packet(frame)["data"], bytes((servo_id, action)))
+        for servo_id in (0, 5, 255, True, "2", 2.0):
+            with self.assertRaises(ValueError):
+                UPPER.LoRaProtocol.cmd_set_window(1, 1, servo_id)
 
     def test_window_ack_only_accepts_master_and_status_zero_to_three(self):
         for status in (0, 1, 2, 3):
@@ -718,7 +840,7 @@ class WindowControlTests(unittest.TestCase):
         TelemetryPollingTests.setUp(self)
         self.app.FAN_PINS = UPPER.MonitorApp.FAN_PINS
         self.app.FAN_ACK_TIMEOUT_S = UPPER.MonitorApp.FAN_ACK_TIMEOUT_S
-        self.app.duty_vars = {channel: ValueStub(25) for channel in (1, 2)}
+        self.app.duty_vars = {channel: ValueStub(25) for channel in (1, 2, 3, 4)}
         self.app._normalize_fan_duty = UPPER.MonitorApp._normalize_fan_duty
         self.app.events = queue.Queue()
         self.app.after = Mock()

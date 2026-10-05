@@ -145,6 +145,23 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
                 return ((message->payload[0] == 0x0BU) ||
                         (message->payload[0] == 0x0FU)) ? 1U : 0U;
             }
+            if (message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_BYTES)
+            {
+                uint16_t value[4];
+                uint8_t i;
+                if ((message->payload[0] != 0x1BU) && (message->payload[0] != 0x1FU))
+                { return 0U; }
+                for (i = 0U; i < 4U; i++)
+                {
+                    uint8_t offset = (uint8_t)(26U + 2U * i);
+                    value[i] = (uint16_t)((uint16_t)message->payload[offset] |
+                        ((uint16_t)message->payload[offset + 1U] << 8U));
+                }
+                if ((value[0] == 0xFFFFU) && (value[1] == 0xFFFFU) &&
+                    (value[2] == 0xFFFFU) && (value[3] == 0xFFFFU)) { return 1U; }
+                return ((value[0] <= 4095U) && (value[1] <= 3600U) &&
+                        (value[2] <= 7200U) && (value[3] < 2000U)) ? 1U : 0U;
+            }
             if (message->payload_length == LORA_PROTOCOL_LEGACY_TELEMETRY_BYTES)
             {
                 return ((message->payload[0] == 0U) || (message->payload[0] == 1U) ||
@@ -160,7 +177,7 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
             return ((message->source_role == GATEWAY_ROLE_CONTROL_ROOM) &&
                     (message->destination_role == GATEWAY_ROLE_MASTER) &&
                     (message->payload_length == 2U) &&
-                    (message->payload[0] == 1U) &&
+                    (message->payload[0] >= 1U && message->payload[0] <= 4U) &&
                     (message->payload[1] <= 1U)) ? 1U : 0U;
         case GATEWAY_TYPE_ACK:
             return ((message->payload_length == 2U) &&

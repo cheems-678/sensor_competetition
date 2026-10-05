@@ -156,8 +156,8 @@ class DesktopAPI:
     def set_fan(self, channel, duty):
         return self._service.submit("set_fan", channel, duty)
 
-    def set_window(self, action):
-        return self._service.submit("set_window", action)
+    def set_window(self, action, servo_id=1):
+        return self._service.submit("set_window", action, servo_id)
 
     def get_snapshot(self, after_log_id=0):
         return self._service.get_snapshot(after_log_id)

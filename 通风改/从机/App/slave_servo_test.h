@@ -5,6 +5,7 @@
 
 #define SLAVE_SERVO_TEST_STEP_US     10U
 #define SLAVE_SERVO_TEST_HOLD_MS     2000U
+#define SLAVE_SERVO_COUNT            4U
 
 /* Continuous-rotation business action; calibrate the unloaded stop point. */
 #ifndef SLAVE_SERVO_WINDOW_RUN_MS
@@ -29,7 +30,8 @@ typedef enum
 {
     SLAVE_SERVO_TEST_ERROR_NONE = 0,
     SLAVE_SERVO_TEST_ERROR_START,
-    SLAVE_SERVO_TEST_ERROR_UPDATE
+    SLAVE_SERVO_TEST_ERROR_UPDATE,
+    SLAVE_SERVO_TEST_ERROR_CONFIG
 } SlaveServoTestError;
 
 typedef struct
@@ -45,9 +47,23 @@ typedef struct
 
 /* Command diagnostics only: no state confirms physical position. */
 extern volatile SlaveServoTestDiagnostics SlaveServoTestDiag;
+/* IDs 2..4; ID 1 keeps the historical diagnostic symbol above. */
+extern volatile SlaveServoTestDiagnostics SlaveServoExtraDiag[SLAVE_SERVO_COUNT - 1U];
+
+typedef struct
+{
+    uint32_t run_ms;
+    uint16_t stop_us;
+    uint16_t close_us;
+    uint16_t open_us;
+} SlaveServoConfig;
+
+extern const SlaveServoConfig SlaveServoConfigs[SLAVE_SERVO_COUNT];
+const volatile SlaveServoTestDiagnostics *SlaveServoTest_GetDiagnostics(uint8_t servo_id);
+uint8_t SlaveServoTest_SetWindowChannel(uint8_t servo_id, uint8_t open, uint32_t now_ms);
 
 void SlaveServoTest_Init(uint32_t now_ms);
-/* Business mode owns PWM at the stop point until a valid command arrives. */
+/* Business mode initializes all four outputs at their calibrated stop points. */
 void SlaveServoTest_InitManual(uint32_t now_ms);
 /* Starts a timed action. An in-flight same-direction command does not renew it.
  * Success confirms only the PWM setting, not action completion or position. */

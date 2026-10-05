@@ -18,6 +18,8 @@
 #include "lora.h"
 #include "slave_acoustic.h"
 #include "slave_servo_test.h"
+#include "slave_esp_web.h"
+#include "slave_mq2.h"
 #endif
 
 void SystemClock_Config(void);
@@ -54,16 +56,21 @@ int main(void)
     LORA_Init();
     led2_on;
     CPU_TS_TmrInit();
-    SlaveAcoustic_Init(HAL_GetTick());
+    /* SPH0645 retired; MAX4466 ADC acquisition will be added separately.
+       Uninitialized acoustic service returns invalid telemetry values. */
     SlaveServoTest_InitManual(HAL_GetTick());
+    SlaveMq2_Init(HAL_GetTick());
+    SlaveEspWeb_Init(HAL_GetTick());
 
     for (;;)
     {
-        /* DMA runs independently; drain before and after potentially slow I2C/UART. */
-        SlaveAcoustic_Process(HAL_GetTick());
         SlaveServoTest_Process(HAL_GetTick());
+        SlaveMq2_Process(HAL_GetTick());
         LoraP2PTrans();
-        SlaveAcoustic_Process(HAL_GetTick());
+        SlaveServoTest_Process(HAL_GetTick());
+        SlaveMq2_Process(HAL_GetTick());
+        SlaveEspWeb_Process(HAL_GetTick());
+        SlaveServoTest_Process(HAL_GetTick());
     }
 #endif
 }

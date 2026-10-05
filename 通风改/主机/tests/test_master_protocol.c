@@ -33,15 +33,16 @@ static void test_known_layouts(void)
     uint8_t length;
     for (role = 2U; role <= 3U; role++)
     {
-        for (length = 18U; length <= 26U; length += 8U)
+        for (length = 18U; length <= 34U; length += 8U)
         {
             for (flags = 0U; flags < 256U; flags++)
             {
                 LoRaMessage message = telemetry(role, length, (uint8_t)flags);
                 unsigned accepted = (role == 3U) ?
-                    ((length == 18U && flags == 0U) || (length == 26U && flags == 8U)) :
+                    ((length == 18U && flags == 0U) || (length == 26U && flags == 8U) || (length == 34U && flags == 0x18U)) :
                     ((length == 18U && (flags == 0U || flags == 1U || flags == 3U || flags == 7U)) ||
-                     (length == 26U && (flags == 0x0BU || flags == 0x0FU)));
+                     (length == 26U && (flags == 0x0BU || flags == 0x0FU)) ||
+                     (length == 34U && (flags == 0x1BU || flags == 0x1FU)));
                 assert((LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_OK) == accepted);
             }
         }
@@ -49,7 +50,7 @@ static void test_known_layouts(void)
     for (length = 0U; length < 40U; length++)
     {
         LoRaMessage message = telemetry(2U, length, 0x0BU);
-        if (length != 18U && length != 26U)
+        if (length != 18U && length != 26U && length != 34U)
         { assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH); }
     }
 }
@@ -100,6 +101,37 @@ static void test_encode_decode_and_stream(void)
     assert(decoded.payload_length == 18U && decoded.payload[0] == 7U);
     frame[10] = 129U;
     assert(LoRaProtocol_Decode(frame, sizeof(frame), &decoded) == LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH);
+}
+
+static void test_rain_slot_encode_decode_and_crc(void)
+{
+    static const uint8_t flags[] = {0x0BU, 0x0FU};
+    static const uint8_t rain_states[] = {0U, 1U, 0xFFU};
+    LoRaMessage decoded;
+    uint8_t frame[141];
+    uint16_t length;
+    unsigned i, j, k;
+
+    for (i = 0U; i < sizeof(flags) / sizeof(flags[0]); i++)
+    {
+        for (j = 0U; j < sizeof(rain_states) / sizeof(rain_states[0]); j++)
+        {
+            LoRaMessage message = telemetry(2U, 26U, flags[i]);
+            /* Distinct neighboring fields expose accidental offset changes. */
+            for (k = 1U; k < 26U; k++)
+            { message.payload[k] = (uint8_t)(0x20U + k); }
+            message.payload[17] = rain_states[j];
+            assert(LoRaProtocol_Encode(&message, frame, sizeof(frame), &length) == LORA_PROTOCOL_OK);
+            assert(length == 39U && frame[10] == 26U);
+            assert(frame[11] == flags[i] && frame[28] == rain_states[j]);
+            assert(LoRaProtocol_Decode(frame, length, &decoded) == LORA_PROTOCOL_OK);
+            assert(decoded.flow_id == message.flow_id && decoded.payload_length == 26U);
+            assert(memcmp(decoded.payload, message.payload, 26U) == 0);
+
+            frame[28] ^= 1U;
+            assert(LoRaProtocol_Decode(frame, length, &decoded) == LORA_PROTOCOL_CRC_MISMATCH);
+        }
+    }
 }
 
 static void test_local_queue_lifetime(void)
@@ -192,7 +224,7 @@ static void test_window_shape_directions_and_ack(void)
         {
             message.payload[0] = (uint8_t)slot; message.payload[1] = (uint8_t)action;
             assert((LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_OK) ==
-                   (slot == 1U && action <= 1U));
+                   (slot >= 1U && slot <= 4U && action <= 1U));
         }
     }
     message = window_command(0U);
@@ -271,13 +303,47 @@ static void test_window_wire_crc_stream_and_queue(void)
     /* Runtime/type+flow cancellation, not the telemetry TTL, governs this request. */
 }
 
+static void test_mq2_fields_bounds_crc_and_stream(void)
+{
+    const uint16_t maximum[] = {4095U, 3600U, 7200U, 1999U};
+    LoRaMessage message = telemetry(2U, 34U, 0x1FU), decoded;
+    LoRaStreamParser parser;
+    uint8_t frame[141]; uint16_t length; unsigned i;
+    for (i = 0U; i < 4U; i++)
+    { message.payload[26U + i * 2U] = (uint8_t)maximum[i]; message.payload[27U + i * 2U] = (uint8_t)(maximum[i] >> 8U); }
+    assert(LoRaProtocol_Encode(&message, frame, sizeof(frame), &length) == LORA_PROTOCOL_OK && length == 47U);
+    LoRaStreamParser_Init(&parser);
+    for (i = 0U; i < length; i++)
+    { assert(LoRaStreamParser_PushByte(&parser, frame[i], &decoded) == (i + 1U == length ? LORA_STREAM_FRAME_READY : LORA_STREAM_WAITING)); }
+    assert(memcmp(message.payload, decoded.payload, 34U) == 0);
+    frame[37] ^= 1U;
+    assert(LoRaProtocol_Decode(frame, length, &decoded) == LORA_PROTOCOL_CRC_MISMATCH);
+    for (i = 0U; i < 4U; i++)
+    {
+        uint16_t invalid = (uint16_t)(maximum[i] + 1U);
+        message.payload[26U + 2U * i] = (uint8_t)invalid;
+        message.payload[27U + 2U * i] = (uint8_t)(invalid >> 8U);
+        assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+        message.payload[26U + 2U * i] = (uint8_t)maximum[i];
+        message.payload[27U + 2U * i] = (uint8_t)(maximum[i] >> 8U);
+    }
+    memset(&message.payload[26], 0, 8U);
+    assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_OK);
+    message.payload[26] = message.payload[27] = 0xFFU;
+    assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+    memset(&message.payload[26], 0xFF, 8U);
+    assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_OK);
+}
+
 int main(void)
 {
+    test_mq2_fields_bounds_crc_and_stream();
     test_known_layouts();
     test_encode_decode_and_stream();
+    test_rain_slot_encode_decode_and_crc();
     test_local_queue_lifetime();
     test_window_shape_directions_and_ack();
     test_window_wire_crc_stream_and_queue();
-    puts("5 master protocol/parser/queue/window groups passed (1024 layouts, 65536 window payloads)");
+    puts("7 master protocol/parser/MQ2/queue/window groups passed (1536 layouts, 6 rain cases, 65536 window payloads)");
     return 0;
 }

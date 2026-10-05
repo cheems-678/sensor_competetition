@@ -1,0 +1,63 @@
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SmokeMonitor } from './smoke-monitor'
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+const reading = (pa7_mv: number) => ({ valid: true, raw: 1000, pa7_mv, ao_mv: pa7_mv * 2, age_ms: 0 })
+
+describe('independent smoke animation', () => {
+  it('changes index and plume density with PA7, preserves live readings while paused and clears stale data', () => {
+    const { rerender } = render(<SmokeMonitor mq2={reading(350)} connected active />)
+    const scene = screen.getByLabelText('烟雾强弱动画')
+    expect(screen.getByLabelText('相对烟雾指数')).toHaveTextContent('0/ 100')
+    expect(scene).toHaveAttribute('data-density', '0')
+    rerender(<SmokeMonitor mq2={reading(850)} connected active />)
+    expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow', '25')
+    expect(scene).toHaveAttribute('data-running', 'true')
+    const lightCount = document.querySelectorAll('.smoke-puff').length
+    fireEvent.click(screen.getByRole('button', { name: '暂停动画' }))
+    rerender(<SmokeMonitor mq2={reading(2500)} connected active />)
+    expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow', '100')
+    expect(document.querySelectorAll('.smoke-puff').length).toBeGreaterThan(lightCount)
+    expect(scene).toHaveAttribute('data-running', 'false')
+    rerender(<SmokeMonitor mq2={reading(850)} connected active={false} />)
+    rerender(<SmokeMonitor mq2={reading(850)} connected active />)
+    expect(screen.getByRole('button', { name: '继续动画' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '继续动画' }))
+    expect(scene).toHaveAttribute('data-running', 'true')
+    rerender(<SmokeMonitor mq2={{ ...reading(2500), age_ms: 2000 }} connected active />)
+    expect(screen.getByLabelText('相对烟雾指数')).toHaveTextContent('--')
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '烟雾指数不可用' })).toBeVisible()
+    expect(scene).toHaveAttribute('data-density', '0')
+    expect(scene).toHaveAttribute('data-running', 'false')
+    expect(screen.getByRole('status')).toHaveTextContent('数据不可用')
+    rerender(<SmokeMonitor mq2={reading(2500)} connected={false} active />)
+    expect(scene).toHaveAttribute('data-density', '0')
+  })
+  it('stops when hidden or offscreen, resumes only active pages and disconnects its observer', () => {
+    let changed: (entries: { isIntersecting: boolean }[]) => void = () => {}
+    const disconnect = vi.fn()
+    vi.stubGlobal('IntersectionObserver', class { constructor(callback: typeof changed) { changed = callback }; observe() {}; disconnect = disconnect })
+    const { rerender, unmount } = render(<SmokeMonitor mq2={reading(1500)} connected active />)
+    const scene = screen.getByLabelText('烟雾强弱动画')
+    act(() => changed([{ isIntersecting: false }]))
+    expect(scene).toHaveAttribute('data-running', 'false')
+    act(() => changed([{ isIntersecting: true }]))
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    fireEvent(document, new Event('visibilitychange'))
+    expect(scene).toHaveAttribute('data-running', 'false')
+    hidden.mockReturnValue(false); fireEvent(document, new Event('visibilitychange'))
+    expect(scene).toHaveAttribute('data-running', 'true')
+    rerender(<SmokeMonitor mq2={reading(1500)} connected active={false} />)
+    expect(scene).toHaveAttribute('data-running', 'false')
+    unmount(); expect(disconnect).toHaveBeenCalledOnce()
+  })
+  it('defaults to paused for reduced motion preferences', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<SmokeMonitor mq2={reading(1500)} connected active />)
+    expect(screen.getByLabelText('烟雾强弱动画')).toHaveAttribute('data-running', 'false')
+    fireEvent.click(screen.getByRole('button', { name: '继续动画' }))
+    expect(screen.getByLabelText('烟雾强弱动画')).toHaveAttribute('data-running', 'true')
+  })
+})

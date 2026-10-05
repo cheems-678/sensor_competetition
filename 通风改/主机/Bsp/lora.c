@@ -21,6 +21,7 @@ static uint8_t g_lora_tx_frame[LORA_PROTOCOL_MAX_FRAME_SIZE];
 static uint16_t g_lora_tx_frame_length;
 static uint8_t g_lora_tx_pending;
 static uint32_t g_lora_tx_enqueued_tick;
+static uint16_t g_lora_tx_mq2_age;
 
 #define LORA_COMMAND_RETRY_COUNT 3U
 #define LORA_RX_PROCESS_BUDGET 128U
@@ -286,6 +287,8 @@ void LoraP2PTX(void)
       LoRaDiag.tx_encode_error_count++;
       return;
     }
+    g_lora_tx_mq2_age = (uint16_t)((uint16_t)g_lora_tx_frame[43] |
+                                 ((uint16_t)g_lora_tx_frame[44] << 8U));
     g_lora_tx_pending = 1U;
   }
 
@@ -319,6 +322,25 @@ void LoraP2PTX(void)
     return;
   }
 
+  if ((g_lora_tx_frame[3] == LORA_MSG_TELEMETRY) &&
+      (g_lora_tx_frame[10] == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE))
+  {
+    uint32_t elapsed = HAL_GetTick() - g_lora_tx_enqueued_tick;
+    uint16_t crc;
+    if ((g_lora_tx_mq2_age >= LORA_TELEMETRY_MQ2_MAX_AGE_MS) ||
+        (elapsed >= LORA_TELEMETRY_MQ2_MAX_AGE_MS - g_lora_tx_mq2_age))
+    { memset(&g_lora_tx_frame[37], 0xFF, 8U); }
+    else
+    {
+      uint16_t age = (uint16_t)(g_lora_tx_mq2_age + elapsed);
+      g_lora_tx_frame[43] = (uint8_t)age;
+      g_lora_tx_frame[44] = (uint8_t)(age >> 8U);
+    }
+    crc = LoRaProtocol_Crc16(&g_lora_tx_frame[2],
+                            (uint16_t)(9U + g_lora_tx_frame[10]));
+    g_lora_tx_frame[g_lora_tx_frame_length - 2U] = (uint8_t)crc;
+    g_lora_tx_frame[g_lora_tx_frame_length - 1U] = (uint8_t)(crc >> 8U);
+  }
   if (HAL_UART_Transmit(&huart2,
                         g_lora_tx_frame,
                         g_lora_tx_frame_length,

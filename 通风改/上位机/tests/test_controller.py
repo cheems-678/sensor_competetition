@@ -63,9 +63,9 @@ def ack(flow, command=P.MSG_SET_FAN_SPEED, status=0):
     return response(P.MSG_ACK, flow, bytes((command, status)))
 
 
-def telemetry_payload(flags=0x0F, left=0, right=9873, slave_temp=242):
+def telemetry_payload(flags=0x0F, left=0, right=9873, slave_temp=242, rain=0xFF):
     payload = struct.pack("<BhHIhHIBII", flags, 236, 478, 101325,
-                          slave_temp, 513, 100982, 0xFF, left, right)
+                          slave_temp, 513, 100982, rain, left, right)
     return payload[:18] if flags in (3, 7) else payload
 
 
@@ -108,7 +108,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(s["controls"]["window_enabled"])
         self.assertEqual(s["window"]["status"], "未连接，位置未知")
         self.assertEqual([(f["channel"], f["pin"], f["duty"]) for f in s["fans"]],
-                         [(1, "PB1", 0), (2, "PB8", 0)])
+                         [(1, "PB1", 0), (2, "PB8", 0), (3, "PA1", 0), (4, "PB9", 0)])
         self.assertTrue(all(v == "--" for v in s["telemetry"]["values"].values()))
 
     def test_refresh_only_selects_first_if_no_existing_port(self):
@@ -146,7 +146,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_fan_commands_round_and_retain_channel_mapping(self):
         port = self.connect()
-        for channel, value, expected in ((1, "25.6", 26), (2, 100, 100), (1, 0, 0)):
+        for channel, value, expected in ((1, "25.6", 26), (2, 100, 100), (3, "49.6", 50), (4, 75, 75), (1, 0, 0)):
             self.controller.set_fan(channel, value)
             self.assertEqual(P.parse_packet(port.writes[-1])["data"], bytes((channel, expected)))
             self.assertEqual(self.controller.fan_status[channel], f"等待确认 {expected}%")
@@ -156,7 +156,7 @@ class ControllerTests(unittest.TestCase):
         for invalid in ("", "abc", "NaN", "inf", -1, 101, None):
             self.controller.set_fan(1, invalid)
             self.assertEqual(self.controller.notice["title"], "输入错误")
-        for channel in (0, 3, 4, 5):
+        for channel in (0, 5):
             self.controller.set_fan(channel, 50)
             self.assertEqual(self.controller.notice["title"], "通道已停用")
         self.assertEqual(port.writes, [])
@@ -181,6 +181,27 @@ class ControllerTests(unittest.TestCase):
         self.controller._handle_frame(ack(flow, status=1))
         self.assertEqual(self.controller.fan_status[2], "主机拒绝执行")
         self.assertFalse(self.controller.fan_pending)
+
+    def test_four_fan_ack_states_are_independent_and_disconnect_cancels_all(self):
+        port = self.connect()
+        flows = {}
+        for channel in (1, 2, 3, 4):
+            self.controller.set_fan(channel, channel * 25)
+            flows[channel] = self.controller.flow_id
+        self.assertEqual(len(self.controller.fan_pending), 4)
+        self.controller._handle_frame(ack(flows[4]))
+        self.controller._handle_frame(ack(flows[3], status=1))
+        self.assertEqual(self.controller.fan_status[4], "已确认 100%")
+        self.assertEqual(self.controller.fan_status[3], "主机拒绝执行")
+        self.assertEqual(self.controller.fan_status[2], "等待确认 50%")
+        self.assertEqual(self.controller.fan_status[1], "等待确认 25%")
+        self.controller.disconnect()
+        self.assertFalse(self.controller.fan_pending)
+        self.controller._handle_frame(ack(flows[1]))
+        self.assertTrue(all(status == "已断开，状态未知" for status in self.controller.fan_status.values()))
+        self.connect()
+        self.assertEqual(self.ports[-1].writes, [])
+        self.assertEqual(len(port.writes), 4)
 
     def test_new_fan_command_supersedes_only_its_channel(self):
         self.connect()
@@ -253,6 +274,58 @@ class ControllerTests(unittest.TestCase):
         for left, right in ((4294967294, 131071), (1, 2), (0, 0)):
             self.sample(telemetry_payload(left=left, right=right))
             self.assertEqual(self.controller.sounds, {"sound_rms_1": str(left), "sound_rms_2": str(right)})
+
+    def test_master_rain_three_states_ignore_slave_link_and_never_send_controls(self):
+        port = self.connect()
+        for rain, expected in ((0, 0), (1, 1), (0xFF, None), (2, None), (254, None)):
+            for flags in (0x0B, 0x0F):
+                self.sample(telemetry_payload(flags=flags, rain=rain))
+                self.assertEqual(self.controller.snapshot()["telemetry"]["rain"],
+                                 {"state": expected, "source": "master"})
+                self.assertEqual(self.controller.values["master_temp"], "23.6 ℃")
+        self.assertTrue(all(P.parse_packet(frame)["type"] == P.MSG_READ_TELEMETRY for frame in port.writes))
+        self.assertEqual(self.controller.duties, {1: 0, 2: 0, 3: 0, 4: 0})
+        self.assertIsNone(self.controller.window_pending)
+
+    def test_old_frame_clears_master_rain_but_preserves_historical_database_value(self):
+        self.connect()
+        self.sample(telemetry_payload(rain=1))
+        historical = bytearray(P.placeholder_payload())
+        historical[13] = 1
+        self.sample(bytes(historical))
+        self.assertEqual(self.controller.rain, {"state": None, "source": None})
+        self.assertEqual(self.database.connection.execute(
+            "SELECT rain_state FROM telemetry_v4 ORDER BY id").fetchall(), [(1,), (1,)])
+        self.sample(telemetry_payload(flags=7, rain=1))
+        self.assertEqual(self.controller.rain, {"state": None, "source": None})
+
+    def test_rain_matching_flow_timeout_error_disconnect_and_snapshot_copy(self):
+        self.connect()
+        self.sample(telemetry_payload(rain=1))
+        snapshot = self.controller.snapshot()
+        snapshot["telemetry"]["rain"]["state"] = 0
+        self.assertEqual(self.controller.rain["state"], 1)
+        self.controller.read_once()
+        flow = self.controller.flow_id
+        self.controller._handle_frame(response(P.MSG_TELEMETRY, flow - 1, telemetry_payload(rain=0)))
+        self.assertEqual(self.controller.rain["state"], 1)
+        self.assertEqual(self.stored_rows(), 1)
+        self.clock.advance(5)
+        self.controller._handle_frame(response(P.MSG_TELEMETRY, flow, telemetry_payload(rain=0)))
+        self.assertEqual(self.controller.rain, {"state": None, "source": None})
+        self.assertEqual(self.stored_rows(), 1)
+        self.sample(telemetry_payload(rain=1))
+        self.controller.read_once()
+        self.clock.advance(5)
+        self.controller.tick()
+        self.assertEqual(self.controller.rain, {"state": None, "source": None})
+        self.sample(telemetry_payload(rain=1))
+        self.controller.read_once()
+        self.controller._handle_frame(response(P.MSG_ERROR, self.controller.flow_id, b"\x07"))
+        self.assertEqual(self.controller.rain, {"state": None, "source": None})
+        self.sample(telemetry_payload(rain=1))
+        self.controller.disconnect()
+        self.assertEqual(self.controller.rain, {"state": None, "source": None})
 
     def test_offline_and_sensor_fault_are_independent(self):
         self.connect()
@@ -440,6 +513,36 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.window_status, "关窗确认超时，结果未知")
         self.assertEqual(len([f for f in port.writes if f[3] == P.MSG_SET_WINDOW]), 2)
 
+    def test_four_servo_routing_queue_capture_and_status_isolation(self):
+        port = self.connect()
+        for servo_id in (1, 2, 3, 4):
+            self.controller.set_window(servo_id % 2, servo_id)
+            self.assertEqual(P.parse_packet(port.writes[-1])["data"], bytes((servo_id, servo_id % 2)))
+            flow = self.controller.flow_id
+            self.controller._handle_frame(ack(flow, P.MSG_SET_WINDOW))
+            self.assertIn("已确认", self.controller.window_statuses[servo_id])
+        previous = dict(self.controller.window_statuses)
+        self.controller.set_fan(1, 10)
+        fan_flow = self.controller.flow_id
+        self.controller.set_window(0, 3)
+        self.controller.set_window(1, 4)  # Busy: must not overwrite queued ID 3.
+        self.assertEqual(self.controller.window_servo_id, 3)
+        self.controller._handle_frame(ack(fan_flow))
+        self.controller.tick()
+        self.assertEqual(P.parse_packet(port.writes[-1])["data"], bytes((3, 0)))
+        self.controller._handle_frame(ack(self.controller.flow_id, P.MSG_SET_WINDOW, 1))
+        self.assertIn("驱动故障", self.controller.window_statuses[3])
+        for servo_id in (1, 2, 4):
+            self.assertEqual(self.controller.window_statuses[servo_id], previous[servo_id])
+        snapshot = self.controller.snapshot()
+        self.assertEqual([(row["channel"], row["pin"]) for row in snapshot["windows"]],
+                         [(1, "PB8"), (2, "PB9"), (3, "PB10"), (4, "PB11")])
+        for servo_id in (0, 5, True, "1", 1.0):
+            with self.assertRaises(ValueError):
+                self.controller.set_window(1, servo_id)
+            with self.assertRaises(ValueError):
+                P.cmd_set_window(1, 1, servo_id)
+
     def test_window_invalid_actions_and_disconnected_action_have_no_pending(self):
         for value in (True, False, 1.0, "1", -1, 2):
             with self.assertRaises(ValueError):
@@ -563,6 +666,7 @@ class ServiceTests(unittest.TestCase):
                 api.read_once()
                 s = self.await_snapshot(service, lambda s: s["telemetry"]["updated_at"] is not None)
                 self.assertEqual(s["telemetry"]["sounds"]["sound_rms_1"], "0")
+                self.assertEqual(s["telemetry"]["rain"], {"state": None, "source": "master"})
                 real_serial.Serial.assert_not_called()
                 real_serial.tools.list_ports.comports.assert_not_called()
             finally:

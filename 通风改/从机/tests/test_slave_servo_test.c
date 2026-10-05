@@ -24,6 +24,34 @@ static uint8_t manual_updates;
     } \
 } while (0)
 
+static uint16_t extra_pulses[3];
+static unsigned extra_updates[3];
+static uint8_t extra_success[3] = {1U, 1U, 1U};
+uint8_t Sg90TestPwm_StartChannel(uint8_t id, uint16_t pulse)
+{
+    if (id < 2U || id > 4U) { return 0U; }
+    extra_pulses[id - 2U] = pulse;
+    extra_updates[id - 2U] = 0U;
+    extra_success[id - 2U] = 1U;
+    return 1U;
+}
+uint8_t Sg90TestPwm_SetChannelPulse(uint8_t id, uint16_t pulse)
+{
+    if (id < 2U || id > 4U || !extra_success[id - 2U]) { return 0U; }
+    extra_pulses[id - 2U] = pulse;
+    extra_updates[id - 2U]++;
+    return 1U;
+}
+void Sg90TestPwm_StopChannel(uint8_t id)
+{
+    if (id >= 2U && id <= 4U) { extra_pulses[id - 2U] = 0U; }
+}
+uint8_t Sg90TestPwm_IsChannelRunning(uint8_t id)
+{
+    if (id == 1U) { return (uint8_t)(previous_pulse != 0U); }
+    return (uint8_t)(id >= 2U && id <= 4U && extra_pulses[id - 2U] != 0U);
+}
+
 uint8_t Sg90TestPwm_Start(uint16_t pulse_us)
 {
     start_calls++;
@@ -326,8 +354,56 @@ static void test_manual_failure_and_automatic_ownership(void)
     CHECK(update_calls == 0U && stop_calls == 0U);
 }
 
+static void test_four_independent_channels(void)
+{
+    uint32_t base = UINT32_MAX - 100U;
+    const uint32_t run = SLAVE_SERVO_WINDOW_RUN_MS;
+    uint8_t id;
+    reset_manual(base);
+    for (id = 1U; id <= 4U; id++)
+    {
+        CHECK(SlaveServoTest_GetDiagnostics(id)->state == SLAVE_SERVO_TEST_MANUAL);
+        CHECK(SlaveServoTest_GetDiagnostics(id)->pulse_us == SLAVE_SERVO_WINDOW_STOP_US);
+        CHECK(SlaveServoTest_SetWindowChannel(id, id & 1U, base + (id - 1U) * 20U) == 1U);
+    }
+    CHECK(previous_pulse == 1700U && extra_pulses[0] == 1300U);
+    CHECK(extra_pulses[1] == 1700U && extra_pulses[2] == 1300U);
+    CHECK(SlaveServoTest_SetWindowChannel(2U, 0U, base + 70U) == 1U);
+    CHECK(extra_updates[0] == 1U); /* Duplicate must not extend ID 2's deadline. */
+    process_at(base + run);
+    CHECK(previous_pulse == SLAVE_SERVO_WINDOW_STOP_US);
+    CHECK(extra_pulses[0] == 1300U && extra_pulses[1] == 1700U);
+    CHECK(SlaveServoTest_SetWindowChannel(3U, 0U, base + run) == 1U);
+    process_at(base + run + 20U);
+    CHECK(extra_pulses[0] == SLAVE_SERVO_WINDOW_STOP_US);
+    CHECK(extra_pulses[1] == 1300U && extra_pulses[2] == 1300U);
+    process_at(base + run + 60U);
+    CHECK(extra_pulses[2] == SLAVE_SERVO_WINDOW_STOP_US && extra_pulses[1] == 1300U);
+    process_at(base + 2U * run);
+    CHECK(extra_pulses[1] == SLAVE_SERVO_WINDOW_STOP_US);
+    CHECK(SlaveServoTest_GetDiagnostics(0U) == 0);
+    CHECK(SlaveServoTest_GetDiagnostics(5U) == 0);
+    CHECK(SlaveServoTest_SetWindowChannel(0U, 1U, 0U) == 0U);
+    CHECK(SlaveServoTest_SetWindowChannel(5U, 0U, 0U) == 0U);
+    CHECK(SlaveServoTest_SetWindowChannel(2U, 2U, 0U) == 0U);
+
+    reset_manual(0U);
+    CHECK(SlaveServoTest_SetWindowChannel(2U, 1U, 10U) == 1U);
+    CHECK(SlaveServoTest_SetWindowChannel(3U, 0U, 20U) == 1U);
+    extra_success[0] = 0U;
+    process_at(10U + run);
+    CHECK(SlaveServoTest_GetDiagnostics(2U)->state == SLAVE_SERVO_TEST_FAULT);
+    CHECK(extra_pulses[0] == 0U && extra_pulses[1] == 1300U);
+    CHECK(SlaveServoTestDiag.state == SLAVE_SERVO_TEST_MANUAL);
+    process_at(20U + run);
+    CHECK(extra_pulses[1] == SLAVE_SERVO_WINDOW_STOP_US);
+    CHECK(SlaveServoTest_SetWindowChannel(4U, 1U, 10000U) == 1U);
+    CHECK(extra_pulses[2] == 1700U);
+}
+
 int main(void)
 {
+    test_four_independent_channels();
     check_full_sequence(0U);
     check_full_sequence(UINT32_MAX - 100U);
     check_full_sequence(UINT32_MAX - 2100U);
@@ -340,7 +416,7 @@ int main(void)
     test_manual_wrap_and_long_pause();
     test_manual_stop_failure_and_no_retry();
     test_manual_failure_and_automatic_ownership();
-    printf("SG90 single-servo test: %lu checks, %lu failures\n",
+    printf("SG90 four-channel/legacy test: %lu checks, %lu failures\n",
            (unsigned long)checks, (unsigned long)failures);
     return (failures == 0U) ? 0 : 1;
 }

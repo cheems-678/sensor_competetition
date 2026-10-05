@@ -136,7 +136,7 @@ def run(argv=None) -> int:
         window = webview.create_window(
             "智能通风系统" + (" · 隔离演示" if args.demo else ""), url,
             js_api=probe.api(service) if probe else DesktopAPI(service), width=width, height=height,
-            min_size=minimum, background_color="#F6F7F9", text_select=True,
+            min_size=minimum, background_color="#050B16", text_select=True,
             minimized=bool(probe), focus=not bool(probe),
         )
         window.events.closed += service.close

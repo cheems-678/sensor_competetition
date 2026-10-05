@@ -6,19 +6,19 @@ import { decimalDraft } from '../lib/duty'
 
 const adjustmentKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'])
 
-export function FanControl({ fan, enabled, submit }: { fan: FanState; enabled: boolean; submit: (channel: number, duty: number | string) => void }) {
+export function FanControl({ fan, enabled, active = true, submit }: { fan: FanState; enabled: boolean; active?: boolean; submit: (channel: number, duty: number | string) => void }) {
   const [draft, setDraft] = useState(String(fan.duty))
   const draftRef = useRef(draft)
   const pointerActive = useRef(false)
   const keys = useRef(new Set<string>())
   const updateDraft = (value: string) => { draftRef.current = value; setDraft(value) }
   useEffect(() => {
-    if (!enabled) { pointerActive.current = false; keys.current.clear() }
-  }, [enabled])
+    if (!enabled || !active) { pointerActive.current = false; keys.current.clear() }
+  }, [enabled, active])
   const number = decimalDraft(draft)
   const sliderValue = Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 0
   const commit = () => {
-    if (!enabled) return
+    if (!enabled || !active) return
     const raw = draftRef.current
     const numeric = decimalDraft(raw)
     if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 100) {

@@ -133,6 +133,42 @@ static void test_all_telemetry_flags(void)
     }
 }
 
+static void test_rain_slot_forwarding_and_crc(void)
+{
+    static const uint8_t flags[] = {0x0BU, 0x0FU};
+    static const uint8_t rain_states[] = {0U, 1U, 0xFFU};
+    uint8_t frame[141], damaged[141];
+    unsigned i, j, k, length;
+
+    for (i = 0U; i < sizeof(flags) / sizeof(flags[0]); i++)
+    {
+        for (j = 0U; j < sizeof(rain_states) / sizeof(rain_states[0]); j++)
+        {
+            reset(); request(150U, 0U);
+            length = make_frame(frame, 2U, 2U, 150U, 26U, flags[i]);
+            for (k = 1U; k < 26U; k++)
+            { frame[11U + k] = (uint8_t)(0x20U + k); }
+            frame[28] = rain_states[j];
+            refresh_crc(frame, length);
+
+            memcpy(damaged, frame, length);
+            damaged[28] ^= 1U; /* Changing rain without CRC must be rejected. */
+            push(0U, damaged, length); GatewayRuntime_Process(1U);
+            assert(send_count == 1U);
+
+            /* Split immediately before the rain byte, retaining the request. */
+            push(0U, frame, 28U); GatewayRuntime_Process(2U);
+            assert(send_count == 1U);
+            push(0U, &frame[28], length - 28U); GatewayRuntime_Process(3U);
+            assert(send_count == 2U && sent[1].port == GATEWAY_OUTPUT_PC);
+            assert(sent[1].length == 39U && sent[1].bytes[10] == 26U);
+            assert(sent[1].bytes[11] == flags[i] && sent[1].bytes[28] == rain_states[j]);
+            assert(memcmp(sent[1].bytes, frame, length) == 0);
+            GatewayRuntime_Process(5000U); assert(send_count == 2U);
+        }
+    }
+}
+
 static void test_malformed_address_flow_and_sticky_frames(void)
 {
     uint8_t frame[141], good[141];
@@ -242,7 +278,7 @@ static void test_window_shape_and_forwarding(void)
     {
         reset(); length = make_window(frame, 500U, (uint8_t)channel, 1U);
         push(1U, frame, length); GatewayRuntime_Process(0U);
-        assert(send_count == (channel == 1U ? 1U : 0U));
+        assert(send_count == (channel >= 1U && channel <= 4U ? 1U : 0U));
     }
     for (length = 0U; length <= 3U; length++)
     {
@@ -326,13 +362,44 @@ static void test_window_ack_matching_queue_and_timeout(void)
     assert(sent[1].bytes[8] == (uint8_t)700U && sent[1].bytes[11] == 10U);
 }
 
+static void test_mq2_layout_and_fields(void)
+{
+    uint8_t frame[141]; unsigned flags, i, length;
+    const uint16_t limits[] = {4095U, 3600U, 7200U, 1999U};
+    for (flags = 0U; flags < 256U; flags++)
+    {
+        reset(); request(900U, 0U);
+        length = make_frame(frame, 2U, 2U, 900U, 34U, (uint8_t)flags);
+        push(0U, frame, 38U); GatewayRuntime_Process(1U);
+        assert(send_count == 1U);
+        push(0U, &frame[38], length - 38U); GatewayRuntime_Process(2U);
+        assert(send_count == ((flags == 0x1BU || flags == 0x1FU) ? 2U : 1U));
+        if (send_count == 2U) { assert(sent[1].length == 47U && memcmp(sent[1].bytes, frame, length) == 0); }
+    }
+    for (i = 0U; i < 6U; i++)
+    {
+        unsigned j;
+        reset(); request(901U, 0U);
+        length = make_frame(frame, 2U, 2U, 901U, 34U, 0x1FU);
+        for (j = 0U; j < 4U; j++)
+        { frame[37U + j * 2U] = (uint8_t)limits[j]; frame[38U + j * 2U] = (uint8_t)(limits[j] >> 8U); }
+        if (i < 4U)
+        { uint16_t value = (uint16_t)(limits[i] + 1U); frame[37U + i * 2U] = (uint8_t)value; frame[38U + i * 2U] = (uint8_t)(value >> 8U); }
+        if (i == 4U) { frame[37] = frame[38] = 0xFFU; }
+        refresh_crc(frame, length); push(0U, frame, length); GatewayRuntime_Process(1U);
+        assert(send_count == (i == 5U ? 2U : 1U));
+    }
+}
+
 int main(void)
 {
+    test_mq2_layout_and_fields();
     test_all_telemetry_flags();
+    test_rain_slot_forwarding_and_crc();
     test_malformed_address_flow_and_sticky_frames();
     test_fan_ack_pending_and_timeout_wrap();
     test_window_shape_and_forwarding();
     test_window_ack_matching_queue_and_timeout();
-    puts("5 real gateway groups passed (telemetry/fan/window, shape/CRC/stream/ACK/queue/wrap)");
+    puts("7 real gateway groups passed (telemetry/rain/fan/window, shape/CRC/stream/ACK/queue/wrap)");
     return 0;
 }

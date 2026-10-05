@@ -20,6 +20,7 @@ static uint16_t last_checked_request_flow, last_notified_flow;
 static uint32_t last_notified_tick;
 static uint8_t incoming[141];
 static uint16_t incoming_length, incoming_index;
+static LoRaMessage last_uart_message;
 
 uint32_t HAL_GetTick(void) { return tick; }
 void HAL_Delay(uint32_t delay) { tick += delay; }
@@ -59,6 +60,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data,
     (void)uart;
     assert(timeout == 50U);
     assert(LoRaProtocol_Decode(data, length, &decoded) == LORA_PROTOCOL_OK);
+    last_uart_message = decoded;
     attempts++;
     last_type = decoded.type;
     if (uart_fail) { return HAL_ERROR; }
@@ -227,6 +229,28 @@ static void test_window_ack_rx_and_direction_filter(void)
     assert(LoRaProtocol_Encode(&message, incoming, sizeof(incoming), &incoming_length) == LORA_PROTOCOL_INVALID_DIRECTION);
 }
 
+static void test_mq2_queue_age_retry_and_expiry(void)
+{
+    LoRaMessage message = response(LORA_MSG_TELEMETRY);
+    unsigned before = attempts;
+    message.payload_length = 34U; message.payload[0] = 0x1FU;
+    memset(&message.payload[26], 0, 8U);
+    message.payload[32] = (uint8_t)1800U; message.payload[33] = (uint8_t)(1800U >> 8U);
+    tick = 20000U; uart_fail = 1U; assert(MasterQueues_Init());
+    assert(MasterQueues_SendLoRa(&message)); LoraP2PTX();
+    tick = 20050U; LoraP2PTX();
+    assert((uint16_t)(last_uart_message.payload[32] | ((uint16_t)last_uart_message.payload[33] << 8U)) == 1850U);
+    tick = 20100U; uart_fail = 0U; LoraP2PTX();
+    assert(attempts == before + 3U);
+    assert((uint16_t)(last_uart_message.payload[32] | ((uint16_t)last_uart_message.payload[33] << 8U)) == 1900U);
+    tick = 21000U; assert(MasterQueues_SendLoRa(&message)); can_transmit = 0U; LoraP2PTX();
+    tick = 21200U; can_transmit = 1U; LoraP2PTX();
+    assert(memcmp(&last_uart_message.payload[26], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
+    tick = 0xFFFFFFF0U; assert(MasterQueues_SendLoRa(&message));
+    tick = 34U; LoraP2PTX();
+    assert((uint16_t)(last_uart_message.payload[32] | ((uint16_t)last_uart_message.payload[33] << 8U)) == 1850U);
+}
+
 int main(void)
 {
     test_uart_retry_has_original_enqueue_lifetime();
@@ -235,6 +259,7 @@ int main(void)
     test_rx_preserves_local_reception_timestamp();
     test_window_uart_retry_cancellation_and_sent_notification();
     test_window_ack_rx_and_direction_filter();
-    puts("6 real LoRa UART/window groups passed (retry/TTL/half-duplex/wrap/ACK/query/RX tick)");
+    test_mq2_queue_age_retry_and_expiry();
+    puts("7 real LoRa UART/MQ2/window groups passed (retry/TTL/half-duplex/wrap/ACK/query/RX tick)");
     return 0;
 }

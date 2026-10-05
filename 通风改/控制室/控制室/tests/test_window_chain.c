@@ -8,9 +8,11 @@
 #include "master_runtime.h"
 #include "master_queues.h"
 #include "master_bme280.h"
+#include "master_rain.h"
 #include "slave_protocol_runtime.h"
 #include "slave_bme280.h"
 #include "slave_acoustic.h"
+#include "slave_mq2.h"
 #include "slave_servo_test.h"
 #include "sg90_test_pwm.h"
 
@@ -20,13 +22,28 @@ static unsigned pwm_starts, pwm_updates, pwm_stops;
 static uint32_t tick;
 static uint16_t pwm_pulse, last_slave_flow;
 static uint8_t slave_online, lose_ack, pwm_ok, hold_master_tx;
+static uint8_t master_rain_state;
 static LoRaMessage last_pc;
 volatile MasterBme280Diagnostics MasterBme280Diag;
 volatile SlaveBme280Diagnostics SlaveBme280Diag;
+volatile SlaveMq2Diagnostics SlaveMq2Diag;
+static uint8_t mq2_valid;
+static uint32_t mq2_tick;
+uint8_t SlaveMq2_GetSample(uint32_t now, SlaveMq2Sample *sample)
+{
+    if (!mq2_valid || (uint32_t)(now - mq2_tick) >= 2000U) { return 0U; }
+    sample->raw = 1241U; sample->pa7_mv = 1000U; sample->ao_mv = 2000U;
+    sample->tick = mq2_tick; sample->sequence = 1U;
+    return 1U;
+}
 
 uint32_t HAL_GetTick(void) { return tick; }
 void MasterLight_Init(uint32_t now) { (void)now; }
 void MasterLight_Process(uint32_t now) { (void)now; }
+void MasterRain_Init(uint32_t now)
+{ (void)now; master_rain_state = MASTER_RAIN_STATE_UNKNOWN; }
+void MasterRain_Process(uint32_t now) { (void)now; }
+uint8_t MasterRain_GetState(uint32_t now) { (void)now; return master_rain_state; }
 uint8_t FanPwm_SetDuty(uint8_t channel, uint8_t duty)
 { return ((channel == 1U || channel == 2U) && duty <= 100U) ? 1U : 0U; }
 void MasterBme280_Init(uint32_t now)
@@ -47,6 +64,34 @@ uint8_t SlaveAcoustic_GetLatest(uint32_t now, SlaveAcousticSnapshot *snapshot)
 { snapshot->rms_left = 321U; snapshot->rms_right = 654U; snapshot->window_tick = now; snapshot->validity_epoch = 1U; return 1U; }
 uint8_t SlaveAcoustic_IsSnapshotValid(uint32_t now, const SlaveAcousticSnapshot *snapshot)
 { return ((uint32_t)(now - snapshot->window_tick) < 300U) ? 1U : 0U; }
+static uint16_t extra_pulses[3];
+static unsigned extra_updates[3];
+static uint8_t extra_success[3] = {1U, 1U, 1U};
+uint8_t Sg90TestPwm_StartChannel(uint8_t id, uint16_t pulse)
+{
+    if (id < 2U || id > 4U) { return 0U; }
+    extra_pulses[id - 2U] = pulse;
+    extra_updates[id - 2U] = 0U;
+    extra_success[id - 2U] = 1U;
+    return 1U;
+}
+uint8_t Sg90TestPwm_SetChannelPulse(uint8_t id, uint16_t pulse)
+{
+    if (id < 2U || id > 4U || !extra_success[id - 2U]) { return 0U; }
+    extra_pulses[id - 2U] = pulse;
+    extra_updates[id - 2U]++;
+    return 1U;
+}
+void Sg90TestPwm_StopChannel(uint8_t id)
+{
+    if (id >= 2U && id <= 4U) { extra_pulses[id - 2U] = 0U; }
+}
+uint8_t Sg90TestPwm_IsChannelRunning(uint8_t id)
+{
+    if (id == 1U) { return (uint8_t)(pwm_pulse != 0U); }
+    return (uint8_t)(id >= 2U && id <= 4U && extra_pulses[id - 2U] != 0U);
+}
+
 uint8_t Sg90TestPwm_Start(uint16_t pulse)
 { CHECK(pulse == 1500U); pwm_starts++; pwm_pulse = pulse; return 1U; }
 uint8_t Sg90TestPwm_SetPulse(uint16_t pulse)
@@ -69,6 +114,8 @@ uint8_t LORA_SendData(const uint8_t *frame, uint16_t length)
     CHECK(message.source_role == LORA_ROLE_SLAVE && message.destination_role == LORA_ROLE_MASTER);
     CHECK(message.source_group == 1U && message.destination_group == 1U);
     CHECK(message.flow_id == last_slave_flow);
+    if (message.type == LORA_MSG_TELEMETRY)
+    { CHECK(message.payload[17] == 0xFFU); } /* Rain belongs to the master. */
     if (lose_ack && message.type == LORA_MSG_ACK) { return 1U; }
     receive_master(frame, length);
     return 1U;
@@ -121,6 +168,8 @@ static void advance(unsigned milliseconds)
 static void reset(uint32_t start)
 {
     tick = start;
+    mq2_valid = 0U; mq2_tick = start;
+    memset((void *)&SlaveMq2Diag, 0, sizeof(SlaveMq2Diag));
     pc_count = gateway_downlinks = master_downlinks = stale_drops = 0U;
     pwm_starts = pwm_updates = pwm_stops = 0U;
     slave_online = pwm_ok = 1U; lose_ack = hold_master_tx = 0U;
@@ -130,7 +179,7 @@ static void reset(uint32_t start)
     GatewayRuntime_Init(gateway_send, NULL);
     CHECK(pwm_pulse == 1500U && SlaveServoTestDiag.state == SLAVE_SERVO_TEST_MANUAL);
 }
-static void command(uint8_t type, uint16_t flow, uint8_t action)
+static void command_channel(uint8_t type, uint16_t flow, uint8_t action, uint8_t servo_id)
 {
     LoRaMessage message;
     uint8_t frame[LORA_PROTOCOL_MAX_FRAME_SIZE];
@@ -141,12 +190,14 @@ static void command(uint8_t type, uint16_t flow, uint8_t action)
     message.destination_role = LORA_ROLE_MASTER; message.destination_group = 1U;
     message.flow_id = flow;
     message.payload_length = (type == LORA_MSG_SET_WINDOW) ? 2U : 1U;
-    message.payload[0] = (type == LORA_MSG_SET_WINDOW) ? 1U : action;
+    message.payload[0] = (type == LORA_MSG_SET_WINDOW) ? servo_id : action;
     message.payload[1] = action;
     CHECK(LoRaProtocol_Encode(&message, frame, sizeof(frame), &length) == LORA_PROTOCOL_OK);
     for (i = 0U; i < length; i++) { GatewayRuntime_PushPcByteFromIsr(frame[i]); }
     pump();
 }
+static void command(uint8_t type, uint16_t flow, uint8_t action)
+{ command_channel(type, flow, action, 1U); }
 static void check_ack(uint16_t flow, uint8_t status)
 {
     CHECK(last_pc.type == LORA_MSG_ACK && last_pc.flow_id == flow);
@@ -160,7 +211,7 @@ static uint32_t read_u32(const uint8_t *data)
 static void check_telemetry(uint16_t flow)
 {
     CHECK(last_pc.type == LORA_MSG_TELEMETRY && last_pc.flow_id == flow);
-    CHECK(last_pc.payload_length == 26U && last_pc.payload[0] == 0x0FU);
+    CHECK(last_pc.payload_length == 34U && last_pc.payload[0] == 0x1FU);
     CHECK(last_pc.payload[1] == 201U && last_pc.payload[2] == 0U);
     CHECK(read_u32(&last_pc.payload[5]) == 101101U);
     CHECK(last_pc.payload[9] == 123U && last_pc.payload[10] == 0U);
@@ -237,6 +288,45 @@ static void telemetry_isolation(void)
     CHECK(pwm_pulse == 1700U && pc_count == 3U && MasterRuntimeDiag.slave_response_match_count == 2U);
     puts("PASS telemetry/window/telemetry keep CRC and sensor fields separate");
 }
+static void rain_telemetry_chain(void)
+{
+    unsigned online, rain;
+    for (online = 0U; online <= 1U; online++)
+    {
+        for (rain = 0U; rain <= 1U; rain++)
+        {
+            uint16_t flow = (uint16_t)(0x700U + online * 2U + rain);
+            reset(0U);
+            slave_online = (uint8_t)online;
+            master_rain_state = (uint8_t)rain;
+            command(LORA_MSG_READ_TELEMETRY, flow, 0U);
+            advance(online ? 50U : 500U);
+            CHECK(pc_count == 1U && last_pc.type == LORA_MSG_TELEMETRY);
+            CHECK(last_pc.flow_id == flow && last_pc.payload_length == 34U);
+            CHECK(last_pc.payload[0] == (online ? 0x1FU : 0x1BU));
+            CHECK(last_pc.payload[17] == rain);
+            CHECK(last_pc.payload[1] == 201U && last_pc.payload[2] == 0U);
+            CHECK(read_u32(&last_pc.payload[5]) == 101101U);
+            if (online)
+            {
+                CHECK(last_pc.payload[9] == 123U && last_pc.payload[10] == 0U);
+                CHECK(read_u32(&last_pc.payload[13]) == 100123U);
+                CHECK(read_u32(&last_pc.payload[18]) == 321U);
+                CHECK(read_u32(&last_pc.payload[22]) == 654U);
+            }
+            else
+            {
+                CHECK(last_pc.payload[9] == 0U && last_pc.payload[10] == 0x80U);
+                CHECK(last_pc.payload[11] == 0xFFU && last_pc.payload[12] == 0xFFU);
+                CHECK(read_u32(&last_pc.payload[13]) == 0xFFFFFFFFU);
+                CHECK(read_u32(&last_pc.payload[18]) == 0xFFFFFFFFU);
+                CHECK(read_u32(&last_pc.payload[22]) == 0xFFFFFFFFU);
+            }
+            CHECK(pwm_pulse == 1500U && pwm_updates == 0U);
+        }
+    }
+    puts("PASS local dry/wet telemetry survives master/gateway and slave disconnection");
+}
 static void unknown_results(void)
 {
     reset(0U); slave_online = 0U;
@@ -274,7 +364,7 @@ static void stop_driver_failure(void)
     CHECK(SlaveServoTestDiag.state == SLAVE_SERVO_TEST_FAULT && pc_count == 2U);
     command(LORA_MSG_SET_WINDOW, 0x412U, 0U); advance(50U); check_ack(0x412U, 1U);
     CHECK(pwm_updates == 2U && pwm_stops == 1U);
-    puts("PASS failed stop faults PWM while 0F telemetry and prior action ACK remain valid");
+    puts("PASS failed stop faults PWM while 1F telemetry and prior action ACK remain valid");
 }
 static void stale_queue(void)
 {
@@ -299,11 +389,54 @@ static void tick_wrap(void)
     CHECK(pwm_pulse == 1500U);
     puts("PASS reply, 300 ms stop and timeout across HAL tick wrap");
 }
+static void four_channel_chain(void)
+{
+    uint8_t id;
+    reset(0U);
+    for (id = 1U; id <= 4U; id++)
+    {
+        command_channel(LORA_MSG_SET_WINDOW, (uint16_t)(200U + id), id & 1U, id);
+        advance(50U); check_ack((uint16_t)(200U + id), 0U);
+        CHECK(SlaveServoTest_GetDiagnostics(id)->pulse_us == ((id & 1U) ? 1700U : 1300U));
+    }
+    CHECK(pwm_pulse == 1700U && extra_pulses[0] == 1300U);
+    CHECK(extra_pulses[1] == 1700U && extra_pulses[2] == 1300U);
+    advance(99U); CHECK(pwm_pulse == 1700U);
+    advance(1U); CHECK(pwm_pulse == 1500U && extra_pulses[0] == 1300U);
+    advance(50U); CHECK(extra_pulses[0] == 1500U && extra_pulses[1] == 1700U);
+    advance(50U); CHECK(extra_pulses[1] == 1500U && extra_pulses[2] == 1300U);
+    advance(50U); CHECK(extra_pulses[2] == 1500U);
+    CHECK(pc_count == 4U && gateway_downlinks == 4U && master_downlinks == 4U);
+    puts("PASS four IDs routed intact through gateway/master/slave with independent deadlines");
+}
+
+static void mq2_chain(void)
+{
+    uint16_t age;
+    reset(100U); mq2_valid = 1U; SlaveMq2Diag.valid = 1U;
+    command(LORA_MSG_READ_TELEMETRY, 900U, 0U); advance(50U);
+    check_telemetry(900U);
+    CHECK(last_pc.payload[26] == (uint8_t)1241U && last_pc.payload[27] == (uint8_t)(1241U >> 8U));
+    CHECK(last_pc.payload[28] == (uint8_t)1000U && last_pc.payload[30] == (uint8_t)2000U);
+    age = (uint16_t)(last_pc.payload[32] | ((uint16_t)last_pc.payload[33] << 8U));
+    CHECK(age == 50U);
+    advance(1950U); command(LORA_MSG_READ_TELEMETRY, 901U, 0U); advance(50U);
+    CHECK(last_pc.flow_id == 901U && last_pc.payload[0] == 0x1FU);
+    CHECK(memcmp(&last_pc.payload[26], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
+    CHECK(last_pc.payload[9] == 123U); /* MQ expiry leaves BME available. */
+    reset(0xFFFFFFF0U); mq2_valid = 1U; SlaveMq2Diag.valid = 1U;
+    command(LORA_MSG_READ_TELEMETRY, 902U, 0U); advance(50U);
+    CHECK(last_pc.flow_id == 902U && last_pc.payload[32] == 50U && last_pc.payload[33] == 0U);
+    puts("PASS MQ2 real three-board encoding/forwarding, independent expiry and tick wrap");
+}
+
 int main(void)
 {
+    mq2_chain();
+    four_channel_chain();
     normal_chain(); same_direction_repeat(); reverse_restarts_timer();
-    telemetry_isolation(); unknown_results(); driver_failure();
+    telemetry_isolation(); rain_telemetry_chain(); unknown_results(); driver_failure();
     stop_driver_failure(); stale_queue(); tick_wrap();
-    printf("window chain: 9 groups, %u checks, 0 failures\n", checks);
+    printf("window/MQ2 chain: 12 groups, %u checks, 0 failures\n", checks);
     return 0;
 }

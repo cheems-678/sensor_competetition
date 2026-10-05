@@ -45,9 +45,24 @@ venv/
 **/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.0
 **/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.build_log.htm
 **/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.htm
+**/MDK-ARM/LoraSlaveV1.0/four_servo_disassembly.txt
 
 # Local agent work records
 .workbuddy/
+
+# Per-device ESP hotspot credentials (local build configuration only)
+esp_ap_config.local.h
+
+# Simulation-platform local previews, browser profiles, backups, and archives
+通风改/上位机/仿真平台/_*
+通风改/上位机/仿真平台/sim_logs/
+通风改/上位机/仿真平台/shot*.png
+通风改/上位机/仿真平台/*.zip
+通风改/上位机/仿真平台/sample_uart.log
+通风改/上位机/仿真平台.zip
+
+# Local workspace helper, not part of the sensor project
+_shell.py
 
 # Editors and operating system files
 .vscode/

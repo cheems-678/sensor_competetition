@@ -812,6 +812,11 @@
               <FileType>1</FileType>
               <FilePath>..\App\master_light_control.c</FilePath>
             </File>
+            <File>
+              <FileName>master_rain.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\master_rain.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

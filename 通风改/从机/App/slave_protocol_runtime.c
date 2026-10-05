@@ -3,6 +3,7 @@
 #include "lora.h"
 #include "slave_bme280.h"
 #include "slave_acoustic.h"
+#include "slave_mq2.h"
 #include "slave_servo_test.h"
 #include "sg90_test_pwm.h"
 
@@ -14,8 +15,8 @@
 #define FRAME_MAX_PAYLOAD            (128U)
 #define FRAME_MIN_SIZE               (13U)
 #define FRAME_MAX_SIZE               (141U)
-#define FRAME_TELEMETRY_PAYLOAD_SIZE (26U)
-#define FRAME_ACOUSTIC_LAYOUT        (0x08U)
+#define FRAME_TELEMETRY_PAYLOAD_SIZE (34U)
+#define FRAME_ACOUSTIC_LAYOUT        (0x18U)
 #define FRAME_ROLE_MASTER            (0x02U)
 #define FRAME_ROLE_SLAVE             (0x03U)
 #define FRAME_TYPE_READ_TELEMETRY    (0x01U)
@@ -75,11 +76,15 @@ static uint32_t g_tx_sample_tick, g_last_sample_tick;
 static uint8_t g_tx_sample_valid, g_last_sample_valid;
 static SlaveAcousticSnapshot g_tx_acoustic, g_last_acoustic;
 static uint8_t g_tx_acoustic_valid, g_last_acoustic_valid;
+static uint32_t g_tx_mq2_tick, g_last_mq2_tick;
+static uint32_t g_tx_mq2_errors, g_last_mq2_errors;
+static uint8_t g_tx_mq2_valid, g_last_mq2_valid;
 /* Window ACK never borrows the telemetry frame, cache or forced sample slot. */
 static uint8_t g_window_ack_pending;
 static uint8_t g_window_ack_frame[FRAME_WINDOW_ACK_SIZE];
 static uint8_t g_window_ack_attempt_count;
 static uint8_t g_window_action;
+static uint8_t g_window_servo_id;
 static uint16_t g_window_flow_id;
 static uint32_t g_window_ack_not_before_tick;
 
@@ -197,6 +202,7 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
 {
     uint8_t payload_length = FRAME_TELEMETRY_PAYLOAD_SIZE;
     SlaveBme280Sample sample;
+    SlaveMq2Sample mq2;
 
     g_tx_frame[0] = FRAME_HEAD_1;
     g_tx_frame[1] = FRAME_HEAD_2;
@@ -235,6 +241,16 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
         SlaveRuntime_WriteU32(&g_tx_frame[33], g_tx_acoustic.rms_right);
     }
 
+    g_tx_mq2_valid = SlaveMq2_GetSample(g_current_tick, &mq2);
+    if (g_tx_mq2_valid != 0U)
+    {
+        g_tx_mq2_tick = mq2.tick;
+        g_tx_mq2_errors = SlaveMq2Diag.error_count;
+        SlaveRuntime_WriteU16(&g_tx_frame[37], mq2.raw);
+        SlaveRuntime_WriteU16(&g_tx_frame[39], (uint16_t)mq2.pa7_mv);
+        SlaveRuntime_WriteU16(&g_tx_frame[41], (uint16_t)mq2.ao_mv);
+        SlaveRuntime_WriteU16(&g_tx_frame[43], (uint16_t)(g_current_tick - mq2.tick));
+    }
     g_tx_frame_length = (uint16_t)(FRAME_MIN_SIZE + payload_length);
     SlaveRuntime_UpdateTxCrc();
 
@@ -248,6 +264,9 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_last_sample_tick = g_tx_sample_tick;
     g_last_acoustic = g_tx_acoustic;
     g_last_acoustic_valid = g_tx_acoustic_valid;
+    g_last_mq2_valid = g_tx_mq2_valid;
+    g_last_mq2_tick = g_tx_mq2_tick;
+    g_last_mq2_errors = g_tx_mq2_errors;
 
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = g_current_tick + SLAVE_REPLY_DELAY_MS;
@@ -285,6 +304,9 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
         g_tx_sample_tick = g_last_sample_tick;
         g_tx_acoustic = g_last_acoustic;
         g_tx_acoustic_valid = g_last_acoustic_valid;
+        g_tx_mq2_valid = g_last_mq2_valid;
+        g_tx_mq2_tick = g_last_mq2_tick;
+        g_tx_mq2_errors = g_last_mq2_errors;
     }
     return 1U;
 }
@@ -294,7 +316,7 @@ static void SlaveRuntime_HandleWindow(const SlaveMessage *message)
     uint8_t status;
     uint16_t crc;
 
-    if ((message->payload_length != 2U) || (message->payload[0] != 1U) ||
+    if ((message->payload_length != 2U) || (message->payload[0] < 1U) || (message->payload[0] > SLAVE_SERVO_COUNT) ||
         (message->payload[1] > 1U))
     {
         SlaveRuntimeDiag.ignored_message_count++;
@@ -303,6 +325,7 @@ static void SlaveRuntime_HandleWindow(const SlaveMessage *message)
     if (g_window_ack_pending != 0U)
     {
         if ((message->flow_id == g_window_flow_id) &&
+            (message->payload[0] == g_window_servo_id) &&
             (message->payload[1] == g_window_action))
         {
             SlaveRuntimeDiag.duplicate_request_count++;
@@ -317,11 +340,12 @@ static void SlaveRuntime_HandleWindow(const SlaveMessage *message)
     /* Reserve first: an accepted action can never lose its response slot. */
     g_window_ack_pending = 1U;
     g_window_flow_id = message->flow_id;
+    g_window_servo_id = message->payload[0];
     g_window_action = message->payload[1];
     g_window_ack_attempt_count = 0U;
     SlaveRuntimeDiag.request_count++;
     SlaveRuntimeDiag.last_flow_id = message->flow_id;
-    status = (SlaveServoTest_SetWindow(g_window_action, HAL_GetTick()) != 0U) ?
+    status = (SlaveServoTest_SetWindowChannel(g_window_servo_id, g_window_action, HAL_GetTick()) != 0U) ?
              0U : 1U;
     g_window_ack_not_before_tick = HAL_GetTick() +
                                  ((status == 0U) ? SG90_TEST_PERIOD_MS : 0U);
@@ -464,6 +488,7 @@ void SlaveRuntime_Init(uint8_t local_group)
     g_window_ack_pending = 0U;
     g_window_ack_attempt_count = 0U;
     g_window_action = 0U;
+    g_window_servo_id = 0U;
     g_window_flow_id = 0U;
     g_window_ack_not_before_tick = 0U;
     memset(g_window_ack_frame, 0, sizeof(g_window_ack_frame));
@@ -476,6 +501,7 @@ void SlaveRuntime_Init(uint8_t local_group)
     g_seen_overflow = 0U;
     g_tx_sample_valid = g_last_sample_valid = 0U;
     g_tx_acoustic_valid = g_last_acoustic_valid = 0U;
+    g_tx_mq2_valid = g_last_mq2_valid = 0U;
     memset(&g_tx_acoustic, 0, sizeof(g_tx_acoustic));
     memset(&g_last_acoustic, 0, sizeof(g_last_acoustic));
     SlaveBme280_Init(HAL_GetTick());
@@ -588,6 +614,19 @@ void SlaveRuntime_Process(uint32_t now_ms)
         }
         if (changed != 0U)
         {
+            SlaveRuntime_UpdateTxCrc();
+            memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
+        }
+        if (g_tx_mq2_valid != 0U)
+        {
+            uint32_t age = now_ms - g_tx_mq2_tick;
+            if ((age >= SLAVE_MQ2_MAX_AGE_MS) || (SlaveMq2Diag.valid == 0U) ||
+                (SlaveMq2Diag.error_count != g_tx_mq2_errors))
+            {
+                memset(&g_tx_frame[37], 0xFF, 8U);
+                g_tx_mq2_valid = g_last_mq2_valid = 0U;
+            }
+            else { SlaveRuntime_WriteU16(&g_tx_frame[43], (uint16_t)age); }
             SlaveRuntime_UpdateTxCrc();
             memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
         }

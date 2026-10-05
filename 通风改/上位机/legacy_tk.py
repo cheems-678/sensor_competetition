@@ -11,6 +11,7 @@ import time
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
+from backend.smoke import smoke_index
 
 try:
     import serial
@@ -38,13 +39,16 @@ class LoRaProtocol:
 
     LEGACY_TELEMETRY_SIZE = 18
     TELEMETRY_SIZE = 26
+    MQ2_TELEMETRY_SIZE = 34
+    MQ2_MAX_AGE_MS = 2000
     FLAG_MASTER_BME = 0x01
     FLAG_DUAL_BME = 0x02
     FLAG_SLAVE_ONLINE = 0x04
     FLAG_ACOUSTIC_EXTENSION = 0x08
     SINGLE_GROUP = 1
-    FAN_CHANNELS = (1, 2)
+    FAN_CHANNELS = (1, 2, 3, 4)
     WINDOW_SERVO = 1
+    WINDOW_SERVOS = (1, 2, 3, 4)
     WINDOW_ACTIONS = (0, 1)
 
     TEMPERATURE_INVALID = -32768
@@ -130,7 +134,7 @@ class LoRaProtocol:
                 cls.SINGLE_GROUP,
             )
         elif msg_type == cls.MSG_SET_WINDOW:
-            valid = (len(payload) == 2 and payload[0] == cls.WINDOW_SERVO
+            valid = (len(payload) == 2 and payload[0] in cls.WINDOW_SERVOS
                      and payload[1] in cls.WINDOW_ACTIONS)
             direction = source == (cls.ROLE_CONTROL, 0) and target == (
                 cls.ROLE_MASTER,
@@ -199,7 +203,7 @@ class LoRaProtocol:
     @classmethod
     def cmd_set_fan_speed(cls, flow_id: int, channel: int, duty: int) -> bytes:
         if channel not in cls.FAN_CHANNELS:
-            raise ValueError("fan channel must be 1 or 2")
+            raise ValueError("fan channel must be 1..4")
         if not 0 <= duty <= 100:
             raise ValueError("fan duty must be 0..100")
         return cls.build_packet(
@@ -213,9 +217,11 @@ class LoRaProtocol:
         )
 
     @classmethod
-    def cmd_set_window(cls, flow_id: int, action: int) -> bytes:
+    def cmd_set_window(cls, flow_id: int, action: int, servo_id: int = 1) -> bytes:
         if type(action) is not int or action not in cls.WINDOW_ACTIONS:
             raise ValueError("window action must be 0 (close) or 1 (open)")
+        if type(servo_id) is not int or servo_id not in cls.WINDOW_SERVOS:
+            raise ValueError("servo id must be 1..4")
         return cls.build_packet(
             cls.MSG_SET_WINDOW,
             cls.ROLE_CONTROL,
@@ -223,7 +229,7 @@ class LoRaProtocol:
             cls.ROLE_MASTER,
             cls.SINGLE_GROUP,
             flow_id,
-            bytes((cls.WINDOW_SERVO, action)),
+            bytes((servo_id, action)),
         )
 
     @classmethod
@@ -248,6 +254,12 @@ class LoRaProtocol:
             valid = payload[0] in (0x00, 0x01, 0x03, 0x07)
         elif len(payload) == cls.TELEMETRY_SIZE:
             valid = payload[0] in (0x0B, 0x0F)
+        elif len(payload) == cls.MQ2_TELEMETRY_SIZE:
+            valid = payload[0] in (0x1B, 0x1F)
+            raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
+            if (raw, pa7_mv, ao_mv, age_ms) != (cls.UINT16_INVALID,) * 4:
+                valid = valid and (raw <= 4095 and pa7_mv <= 3600
+                                   and ao_mv <= 7200 and age_ms < cls.MQ2_MAX_AGE_MS)
         else:
             raise ValueError("invalid telemetry payload length")
         if not valid:
@@ -256,7 +268,7 @@ class LoRaProtocol:
     @classmethod
     def decode_telemetry(cls, payload: bytes) -> dict:
         cls._validate_telemetry_payload(payload)
-        extended = len(payload) == cls.TELEMETRY_SIZE
+        extended = len(payload) in (cls.TELEMETRY_SIZE, cls.MQ2_TELEMETRY_SIZE)
         # Decode the historical wire slots first; replace them for dual BME.
         values = struct.unpack("<BhHIHHBhH", payload[:cls.LEGACY_TELEMETRY_SIZE])
 
@@ -278,10 +290,11 @@ class LoRaProtocol:
             "sound_rms_1": u16(values[4]),
             "sound_rms_2": u16(values[5]),
             "rain_state": None if values[6] == cls.RAIN_INVALID else values[6],
+            "rain_source": None,
             "master_temperature_c": temperature(values[7]),
             "master_humidity_pct": humidity(values[8]),
         }
-        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F)
+        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F, 0x1B, 0x1F)
         master_bme = decoded["flags"] == cls.FLAG_MASTER_BME or dual_bme
         decoded.update(
             master_bme_temperature_c=decoded["slave_temperature_c"] if master_bme else None,
@@ -303,13 +316,25 @@ class LoRaProtocol:
                 sound_rms_1=None, sound_rms_2=None, rain_state=None,
                 master_temperature_c=None, master_humidity_pct=None,
             )
+            if extended:
+                # Only this layout owns PA11 rain; slave link state is unrelated.
+                rain = payload[17]
+                decoded.update(rain_state=rain if rain in (0, 1) else None,
+                               rain_source="master")
             if extended and online:
                 sound_left, sound_right = struct.unpack_from("<II", payload, 18)
                 decoded.update(
                     sound_rms_1=None if sound_left == cls.UINT32_INVALID else sound_left,
                     sound_rms_2=None if sound_right == cls.UINT32_INVALID else sound_right,
                 )
+        decoded["mq2"] = dict(valid=False, raw=None, pa7_mv=None, ao_mv=None, age_ms=None)
+        if len(payload) == cls.MQ2_TELEMETRY_SIZE and decoded["slave_online"]:
+            raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
+            if raw != cls.UINT16_INVALID:
+                decoded["mq2"] = dict(valid=True, raw=raw, pa7_mv=pa7_mv,
+                                      ao_mv=ao_mv, age_ms=age_ms)
         return decoded
+
 
 
 class FrameStreamParser:
@@ -398,13 +423,14 @@ class TelemetryDatabase:
 
 
 class SerialEvent:
-    def __init__(self, kind: str, value: object):
+    def __init__(self, kind: str, value: object, received_at: float | None = None):
         self.kind = kind
         self.value = value
+        self.received_at = received_at
 
 
 class MonitorApp(tk.Tk):
-    FAN_PINS = {1: "PB1", 2: "PB8"}
+    FAN_PINS = {1: "PB1", 2: "PB8", 3: "PA1", 4: "PB9"}
     FAN_ACK_TIMEOUT_S = 8.0
     WINDOW_ACK_TIMEOUT_S = 8.0
     TELEMETRY_POLL_INTERVAL_S = 1.0
@@ -422,6 +448,9 @@ class MonitorApp(tk.Tk):
         ("sound_rms_2", "声音2 / 右声道（SEL 接 3V3）"),
     )
     SOUND_SECTION_TITLE = "从机声学 — 最新短窗声音幅度（RMS）"
+    MQ2_LABELS = (("raw", "ADC 原始值", "计数"), ("pa7_mv", "PA7 输入电压", "mV"),
+                  ("ao_mv", "AO 还原电压", "mV"), ("age_ms", "已知采样年龄", "ms"),
+                  ("index", "相对烟雾指数", "/ 100"))
     SOUND_HELP_TEXT = (
         "约63.7 ms完整采样窗的去直流RMS；界面约每秒查询一次\n"
         "单位：18位 PCM 计数，不是分贝；无有效数据显示 --"
@@ -440,6 +469,10 @@ class MonitorApp(tk.Tk):
         self.flow_id = 0
         self.value_vars = {name: tk.StringVar(value="--") for name, _, _ in self.FIELD_LABELS}
         self.sound_vars = {name: tk.StringVar(value="--") for name, _ in self.SOUND_LABELS}
+        self.rain_var = tk.StringVar(value="--")
+        self.mq2_vars = {name: tk.StringVar(value="--") for name, _, _ in self.MQ2_LABELS}
+        self.mq2 = dict(valid=False)
+        self._mq2_received_at = self._mq2_source_age = None
         self.slave_link_var = tk.StringVar(value="从机链路：未知")
         self.last_telemetry_at = None
         self.duty_vars = {channel: tk.DoubleVar(value=0) for channel in self.FAN_PINS}
@@ -449,6 +482,9 @@ class MonitorApp(tk.Tk):
         self.window_queued_action = None
         self.window_pending = None
         self.window_status_var = tk.StringVar(value="未连接，位置未知")
+        self.window_servo_id = 1
+        self.window_selection = tk.StringVar(value="1 / PB8")
+        self.window_statuses = {channel: "未连接，位置未知" for channel in LoRaProtocol.WINDOW_SERVOS}
         self.window_buttons = {}
         self.fan_send_buttons = {}
         self.next_telemetry_poll_at = 0.0
@@ -583,9 +619,16 @@ class MonitorApp(tk.Tk):
                     self.value_vars[name].set(f"-- {unit}")
         wrapped_label(telemetry, textvariable=self.slave_link_var, style="Card.TLabel").grid(
             row=1, column=0, columnspan=2, sticky="ew")
+        rain = card(self.data_panel, "主机雨滴")
+        rain.grid(row=1, column=0, sticky="ew", pady=(0, pad(12)))
+        rain.columnconfigure(0, weight=1)
+        wrapped_label(rain, textvariable=self.rain_var, style="Value.TLabel").grid(
+            row=0, column=0, sticky="ew", pady=(0, pad(6)))
+        wrapped_label(rain, text="PA11 · 数字 DO；未知显示 --\n仅检测上传，不自动停风机或关窗",
+                      style="Muted.TLabel").grid(row=1, column=0, sticky="ew")
 
         acoustic = card(self.data_panel, self.SOUND_SECTION_TITLE)
-        acoustic.grid(row=1, column=0, sticky="ew")
+        acoustic.grid(row=2, column=0, sticky="ew")
         for column, (name, label) in enumerate(self.SOUND_LABELS):
             acoustic.columnconfigure(column, weight=1, uniform="sound")
             wrapped_label(acoustic, text=label, style="Muted.TLabel").grid(
@@ -596,7 +639,19 @@ class MonitorApp(tk.Tk):
         wrapped_label(acoustic, text=self.SOUND_HELP_TEXT, style="Muted.TLabel").grid(
             row=2, column=0, columnspan=2, sticky="ew")
 
-        fans = card(self.control_panel, "两路风机 PWM（0–100%）")
+        smoke = card(self.data_panel, "从机烟雾 — MQ-2 / PA7 AO · 未标定")
+        smoke.grid(row=3, column=0, sticky="ew", pady=(pad(12), 0))
+        for index, (name, label, unit) in enumerate(self.MQ2_LABELS):
+            column, row = index % 2, index // 2
+            smoke.columnconfigure(column, weight=1, uniform="mq2")
+            wrapped_label(smoke, text=label, style="Muted.TLabel").grid(
+                row=row * 2, column=column, sticky="ew", padx=pad(4))
+            wrapped_label(smoke, textvariable=self.mq2_vars[name], style="Value.TLabel").grid(
+                row=row * 2 + 1, column=column, sticky="ew", padx=pad(4), pady=(0, pad(6)))
+        wrapped_label(smoke, text="PA7 0.35/0.85/1.50/2.50 V → 指数0/25/60/100\n经验参考，浓度未标定；指数不是百分比或ppm\n无有效数据时显示 --，采样有效不代表预热完成",
+                      style="Muted.TLabel").grid(row=6, column=0, columnspan=2, sticky="ew")
+
+        fans = card(self.control_panel, "四路风机 PWM（0–100%）")
         fans.grid(row=0, column=0, sticky="ew", pady=(0, pad(10)))
         fans.columnconfigure(0, weight=1)
         for row, (channel, pin) in enumerate(self.FAN_PINS.items()):
@@ -620,21 +675,28 @@ class MonitorApp(tk.Tk):
             wrapped_label(controls, textvariable=self.fan_status_vars[channel], style="Muted.TLabel").grid(
                 row=2, column=0, columnspan=3, sticky="ew", pady=(pad(2), 0))
 
-        window = card(self.control_panel, "从机 PB8 / SG90 360°连续旋转空载测试")
+        window = card(self.control_panel, "从机四路连续旋转舵机")
         window.grid(row=1, column=0, sticky="ew")
-        window.columnconfigure(0, weight=1)
+        window.columnconfigure(0, weight=0)
         window.columnconfigure(1, weight=1)
+        window.columnconfigure(2, weight=1)
+        selector = ttk.Combobox(window, textvariable=self.window_selection, width=9, state="readonly",
+                                values=("1 / PB8", "2 / PB9", "3 / PB10", "4 / PB11"))
+        selector.grid(row=0, column=0, sticky="ew", padx=(0, pad(8)))
+        self.window_selector = selector
+        selector.bind("<<ComboboxSelected>>", lambda _event: self.window_status_var.set(
+            self.window_statuses[int(self.window_selection.get().split(" / ")[0])]))
         for column, (action, label) in enumerate(((1, "打开窗户"), (0, "关闭窗户"))):
             button = ttk.Button(window, text=label, command=lambda value=action: self._set_window(value),
                                 style="Primary.TButton" if action == 1 else "TButton")
-            button.grid(row=0, column=column, sticky="ew", padx=(0, pad(6)) if column == 0 else (pad(6), 0))
+            button.grid(row=0, column=column + 1, sticky="ew", padx=(0, pad(6)) if column == 0 else (pad(6), 0))
             self.window_buttons[action] = button
         wrapped_label(window, textvariable=self.window_status_var, style="Card.TLabel").grid(
-            row=1, column=0, columnspan=2, sticky="ew", pady=(pad(8), pad(6)))
+            row=1, column=0, columnspan=3, sticky="ew", pady=(pad(8), pad(6)))
         wrapped_label(window, text="开窗 1700 μs / 关窗 1300 μs，各运行 300 ms 后设置 1500 μs 停止脉宽（需空载校准）",
-                      style="Muted.TLabel").grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, pad(6)))
+                      style="Muted.TLabel").grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, pad(6)))
         wrapped_label(window, text="ACK 仅确认动作启动 PWM，不表示动作完成、自动停止成功或机械到位",
-                      style="Muted.TLabel").grid(row=3, column=0, columnspan=2, sticky="ew")
+                      style="Muted.TLabel").grid(row=3, column=0, columnspan=3, sticky="ew")
         self._sync_window_buttons()
 
         # A private bindtag scrolls only this dashboard, without overriding widget actions.
@@ -722,6 +784,7 @@ class MonitorApp(tk.Tk):
         self.window_queued_action = None
         self.window_pending = None
         self.window_status_var.set("已连接，尚未发送，位置未知")
+        self.window_statuses = {channel: self.window_status_var.get() for channel in LoRaProtocol.WINDOW_SERVOS}
         self.next_telemetry_poll_at = time.monotonic() + self.TELEMETRY_POLL_INTERVAL_S
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
@@ -736,6 +799,8 @@ class MonitorApp(tk.Tk):
             self.window_status_var.set("已断开，待发动作已取消")
         elif self.serial_port is not None:
             self.window_status_var.set("已断开，位置未知")
+        self.window_statuses = {channel: "已断开，位置未知" for channel in LoRaProtocol.WINDOW_SERVOS}
+        self.window_statuses[self.window_servo_id] = self.window_status_var.get()
         self.window_queued_action = None
         self.window_pending = None
         self.fan_pending.clear()
@@ -756,7 +821,7 @@ class MonitorApp(tk.Tk):
             try:
                 chunk = self.serial_port.read(self.serial_port.in_waiting or 1)
                 for frame in self.parser.feed(chunk):
-                    self.events.put(SerialEvent("frame", frame))
+                    self.events.put(SerialEvent("frame", frame, time.monotonic()))
             except Exception as exc:
                 self.events.put(SerialEvent("error", str(exc)))
                 break
@@ -780,8 +845,26 @@ class MonitorApp(tk.Tk):
             value.set("--")
         for value in self.sound_vars.values():
             value.set("--")
+        self.rain_var.set("--")
+        self.mq2 = dict(valid=False)
+        self._mq2_received_at = self._mq2_source_age = None
+        for value in self.mq2_vars.values():
+            value.set("--")
         self.slave_link_var.set("从机链路：未知")
         self.last_telemetry_at = None
+
+    def _refresh_mq2(self, now: float):
+        if self.mq2["valid"]:
+            age = self._mq2_source_age + max(0, int((now - self._mq2_received_at) * 1000))
+            if age >= LoRaProtocol.MQ2_MAX_AGE_MS:
+                self.mq2 = dict(valid=False)
+            else:
+                self.mq2["age_ms"] = age
+        for name, _, unit in self.MQ2_LABELS:
+            value = self.mq2.get(name) if self.mq2["valid"] else None
+            if name == "index" and self.mq2["valid"]:
+                value = smoke_index(self.mq2.get("pa7_mv"))
+            self.mq2_vars[name].set("--" if value is None else f"{value} {unit}")
 
     def _request_telemetry(self, force_resample: bool = True):
         if self._window_busy():
@@ -816,6 +899,7 @@ class MonitorApp(tk.Tk):
 
     def _sync_window_buttons(self):
         busy = self._window_busy()
+        self.window_selector.state(["disabled" if busy else "!disabled"])
         for button in self.window_buttons.values():
             button.state(["!disabled" if self.serial_port is not None and not busy else "disabled"])
         for button in (*self.fan_send_buttons.values(), self.telemetry_button):
@@ -825,7 +909,7 @@ class MonitorApp(tk.Tk):
     def _window_action_text(action: int) -> str:
         return "开窗" if action == 1 else "关窗"
 
-    def _set_window(self, action: int):
+    def _set_window(self, action: int, servo_id: int | None = None):
         if type(action) is not int or action not in LoRaProtocol.WINDOW_ACTIONS:
             raise ValueError("window action must be 0 or 1")
         if self.serial_port is None:
@@ -835,14 +919,21 @@ class MonitorApp(tk.Tk):
         if self._window_busy():
             self._append_log("窗户命令等待完成，不重复发送")
             return
+        if servo_id is None:
+            servo_id = int(self.window_selection.get().split(" / ")[0])
+        if type(servo_id) is not int or servo_id not in LoRaProtocol.WINDOW_SERVOS:
+            raise ValueError("servo id must be 1..4")
+        self.window_servo_id = servo_id
         self.window_queued_action = action
         self.window_status_var.set(f"{self._window_action_text(action)}等待前序请求")
+        self.window_statuses[servo_id] = self.window_status_var.get()
         self._sync_window_buttons()
         self._service_window(time.monotonic())
 
     def _finish_window(self, text: str, now: float):
         self.window_pending = None
         self.window_status_var.set(text)
+        self.window_statuses[self.window_servo_id] = text
         self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
         self._sync_window_buttons()
 
@@ -862,12 +953,13 @@ class MonitorApp(tk.Tk):
             return
         action, self.window_queued_action = self.window_queued_action, None
         flow = self._next_flow()
-        if self._send(LoRaProtocol.cmd_set_window(flow, action)):
+        if self._send(LoRaProtocol.cmd_set_window(flow, action, self.window_servo_id)):
             # Start the deadline only after the complete UART write, not at button click.
             self.window_pending = (flow, action, time.monotonic())
             self.window_status_var.set(f"{self._window_action_text(action)}等待确认")
         else:
             self.window_status_var.set(f"{self._window_action_text(action)}发送失败，结果未知")
+        self.window_statuses[self.window_servo_id] = self.window_status_var.get()
         self._sync_window_buttons()
 
     @staticmethod
@@ -909,7 +1001,7 @@ class MonitorApp(tk.Tk):
             except queue.Empty:
                 break
             if event.kind == "frame":
-                self._handle_frame(event.value)
+                self._handle_frame(event.value, event.received_at)
             else:
                 self._append_log("串口错误: " + str(event.value))
                 self._disconnect()
@@ -918,11 +1010,12 @@ class MonitorApp(tk.Tk):
                 del self.fan_pending[flow]
                 self.fan_status_vars[channel].set(f"{duty}% 确认超时")
         now = time.monotonic()
+        self._refresh_mq2(now)
         self._poll_telemetry(now)
         self._service_window(now)
         self.after(50, self._drain_events)
 
-    def _handle_frame(self, frame: bytes):
+    def _handle_frame(self, frame: bytes, received_at: float | None = None):
         self._append_log("RX " + frame.hex(" ").upper())
         try:
             packet = LoRaProtocol.parse_packet(frame)
@@ -941,6 +1034,12 @@ class MonitorApp(tk.Tk):
                 return
             self.telemetry_pending = None
             values = LoRaProtocol.decode_telemetry(packet["data"])
+            self.mq2 = dict(values["mq2"])
+            self._mq2_received_at = now if received_at is None else received_at
+            self._mq2_source_age = self.mq2["age_ms"]
+            self._refresh_mq2(now)
+            rain = values["rain_state"] if values["rain_source"] == "master" else None
+            self.rain_var.set({0: "无雨", 1: "有雨"}.get(rain, "--"))
             online = values["slave_online"]
             self.slave_link_var.set("从机链路：" + (
                 "未知（旧布局）" if online is None else "在线" if online else "离线"))
@@ -949,9 +1048,9 @@ class MonitorApp(tk.Tk):
             for name, _, unit in self.FIELD_LABELS:
                 value = values[name]
                 self.value_vars[name].set("--" if value is None else f"{value:g}{(' ' + unit) if unit else ''}")
-            # Only the 26-byte layout carries current stereo acoustic statistics.
+            # Both extended layouts carry current stereo acoustic statistics.
             for name, _ in self.SOUND_LABELS:
-                value = values[name] if len(packet["data"]) == LoRaProtocol.TELEMETRY_SIZE else None
+                value = values[name] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE) else None
                 self.sound_vars[name].set("--" if value is None else str(value))
         elif packet["type"] == LoRaProtocol.MSG_ACK:
             self._append_log(f"ACK command=0x{packet['data'][0]:02X} status={packet['data'][1]}")

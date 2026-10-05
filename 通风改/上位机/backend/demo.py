@@ -59,8 +59,9 @@ class DemoSerial:
             self.writes.append(bytes(frame))
             if packet["type"] == LoRaProtocol.MSG_READ_TELEMETRY:
                 self._samples += 1
-                payload = struct.pack("<BhHIhHIBII", 0x0F, 236, 478, 101325,
-                                      242, 513, 100982, 0xFF, 0, 9873)
+                payload = struct.pack("<BhHIhHIBII4H", 0x1F, 236, 478, 101325,
+                                      242, 513, 100982, 0xFF, 0, 9873,
+                                      1241, 1000, 2000, 60)
                 msg_type = LoRaProtocol.MSG_TELEMETRY
             elif packet["type"] in (LoRaProtocol.MSG_SET_FAN_SPEED, LoRaProtocol.MSG_SET_WINDOW):
                 payload = bytes((packet["type"], 0))
