@@ -1,10 +1,13 @@
+#include "slave_web_control.h"
 #include "slave_protocol_runtime.h"
 
 #include "lora.h"
 #include "slave_bme280.h"
 #include "slave_acoustic.h"
 #include "slave_mq2.h"
+#include "slave_hcsr04.h"
 #include "slave_servo_test.h"
+#include "slave_master_status.h"
 #include "sg90_test_pwm.h"
 
 #include <string.h>
@@ -15,8 +18,8 @@
 #define FRAME_MAX_PAYLOAD            (128U)
 #define FRAME_MIN_SIZE               (13U)
 #define FRAME_MAX_SIZE               (141U)
-#define FRAME_TELEMETRY_PAYLOAD_SIZE (34U)
-#define FRAME_ACOUSTIC_LAYOUT        (0x18U)
+#define FRAME_TELEMETRY_PAYLOAD_SIZE (42U)
+#define FRAME_ACOUSTIC_LAYOUT        (0x38U)
 #define FRAME_ROLE_MASTER            (0x02U)
 #define FRAME_ROLE_SLAVE             (0x03U)
 #define FRAME_TYPE_READ_TELEMETRY    (0x01U)
@@ -79,6 +82,9 @@ static uint8_t g_tx_acoustic_valid, g_last_acoustic_valid;
 static uint32_t g_tx_mq2_tick, g_last_mq2_tick;
 static uint32_t g_tx_mq2_errors, g_last_mq2_errors;
 static uint8_t g_tx_mq2_valid, g_last_mq2_valid;
+static uint32_t g_tx_ultrasonic_tick, g_last_ultrasonic_tick;
+static uint32_t g_tx_ultrasonic_errors, g_last_ultrasonic_errors;
+static uint8_t g_tx_ultrasonic_valid, g_last_ultrasonic_valid;
 /* Window ACK never borrows the telemetry frame, cache or forced sample slot. */
 static uint8_t g_window_ack_pending;
 static uint8_t g_window_ack_frame[FRAME_WINDOW_ACK_SIZE];
@@ -203,6 +209,7 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     uint8_t payload_length = FRAME_TELEMETRY_PAYLOAD_SIZE;
     SlaveBme280Sample sample;
     SlaveMq2Sample mq2;
+    SlaveHcsr04Sample ultrasonic;
 
     g_tx_frame[0] = FRAME_HEAD_1;
     g_tx_frame[1] = FRAME_HEAD_2;
@@ -251,6 +258,16 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
         SlaveRuntime_WriteU16(&g_tx_frame[41], (uint16_t)mq2.ao_mv);
         SlaveRuntime_WriteU16(&g_tx_frame[43], (uint16_t)(g_current_tick - mq2.tick));
     }
+    g_tx_ultrasonic_valid = SlaveHcsr04_GetSample(g_current_tick, &ultrasonic);
+    if (g_tx_ultrasonic_valid != 0U)
+    {
+        g_tx_ultrasonic_tick = ultrasonic.tick;
+        g_tx_ultrasonic_errors = SlaveHcsr04Diag.error_count;
+        SlaveRuntime_WriteU16(&g_tx_frame[45], ultrasonic.distance_mm);
+        SlaveRuntime_WriteU16(&g_tx_frame[47], ultrasonic.raw_mm);
+        SlaveRuntime_WriteU16(&g_tx_frame[49], ultrasonic.pulse_us);
+        SlaveRuntime_WriteU16(&g_tx_frame[51], (uint16_t)(g_current_tick - ultrasonic.tick));
+    }
     g_tx_frame_length = (uint16_t)(FRAME_MIN_SIZE + payload_length);
     SlaveRuntime_UpdateTxCrc();
 
@@ -267,6 +284,9 @@ static void SlaveRuntime_BuildResponse(uint8_t request_type, uint16_t flow_id)
     g_last_mq2_valid = g_tx_mq2_valid;
     g_last_mq2_tick = g_tx_mq2_tick;
     g_last_mq2_errors = g_tx_mq2_errors;
+    g_last_ultrasonic_valid = g_tx_ultrasonic_valid;
+    g_last_ultrasonic_tick = g_tx_ultrasonic_tick;
+    g_last_ultrasonic_errors = g_tx_ultrasonic_errors;
 
     g_tx_attempt_count = 0U;
     g_tx_not_before_tick = g_current_tick + SLAVE_REPLY_DELAY_MS;
@@ -307,6 +327,9 @@ static uint8_t SlaveRuntime_QueueDuplicate(const SlaveMessage *message)
         g_tx_mq2_valid = g_last_mq2_valid;
         g_tx_mq2_tick = g_last_mq2_tick;
         g_tx_mq2_errors = g_last_mq2_errors;
+        g_tx_ultrasonic_valid = g_last_ultrasonic_valid;
+        g_tx_ultrasonic_tick = g_last_ultrasonic_tick;
+        g_tx_ultrasonic_errors = g_last_ultrasonic_errors;
     }
     return 1U;
 }
@@ -375,9 +398,16 @@ static void SlaveRuntime_HandleMessage(const SlaveMessage *message)
         SlaveRuntimeDiag.ignored_message_count++;
         return;
     }
+    if(message->type==WEB_RESULT){SlaveWebControl_Accept(message->flow_id,message->payload,message->payload_length,g_current_tick);return;}
     if (message->type == FRAME_TYPE_SET_WINDOW)
     {
         SlaveRuntime_HandleWindow(message);
+        return;
+    }
+    if (message->type == MONITOR_STATUS_TYPE)
+    {
+        (void)SlaveMasterStatus_Accept(message->flow_id, message->payload,
+                                     message->payload_length, g_current_tick);
         return;
     }
     if ((message->type != FRAME_TYPE_READ_TELEMETRY) ||
@@ -477,6 +507,8 @@ static void SlaveRuntime_PushByte(uint8_t byte)
 
 void SlaveRuntime_Init(uint8_t local_group)
 {
+    SlaveMasterStatus_Init();
+    SlaveWebControl_Init();
     (void)memset(&g_rx_ring, 0, sizeof(g_rx_ring));
     SlaveRuntime_ResetParser();
     g_local_group = local_group;
@@ -502,6 +534,7 @@ void SlaveRuntime_Init(uint8_t local_group)
     g_tx_sample_valid = g_last_sample_valid = 0U;
     g_tx_acoustic_valid = g_last_acoustic_valid = 0U;
     g_tx_mq2_valid = g_last_mq2_valid = 0U;
+    g_tx_ultrasonic_valid = g_last_ultrasonic_valid = 0U;
     memset(&g_tx_acoustic, 0, sizeof(g_tx_acoustic));
     memset(&g_last_acoustic, 0, sizeof(g_last_acoustic));
     SlaveBme280_Init(HAL_GetTick());
@@ -540,6 +573,7 @@ void SlaveRuntime_Process(uint32_t now_ms)
     uint8_t byte;
     uint16_t count = 0U;
 
+    SlaveWebControl_Process(now_ms);
     SlaveBme280_Process(now_ms);
     now_ms = HAL_GetTick();
     g_current_tick = now_ms;
@@ -630,6 +664,19 @@ void SlaveRuntime_Process(uint32_t now_ms)
             SlaveRuntime_UpdateTxCrc();
             memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
         }
+        if (g_tx_ultrasonic_valid != 0U)
+        {
+            uint32_t age = now_ms - g_tx_ultrasonic_tick;
+            if ((age >= SLAVE_HCSR04_MAX_AGE_MS) || (SlaveHcsr04Diag.valid == 0U) ||
+                (SlaveHcsr04Diag.error_count != g_tx_ultrasonic_errors))
+            {
+                memset(&g_tx_frame[45], 0xFF, 8U);
+                g_tx_ultrasonic_valid = g_last_ultrasonic_valid = 0U;
+            }
+            else { SlaveRuntime_WriteU16(&g_tx_frame[51], (uint16_t)age); }
+            SlaveRuntime_UpdateTxCrc();
+            memcpy(g_last_temp_frame, g_tx_frame, g_tx_frame_length);
+        }
         if (LORA_SendData(g_tx_frame, g_tx_frame_length) != 0U)
         {
             g_tx_pending = 0U;
@@ -648,4 +695,17 @@ void SlaveRuntime_Process(uint32_t now_ms)
             }
         }
     }
+    else if(!g_force_pending && !g_frame_length && g_rx_ring.head==g_rx_ring.tail &&
+        (uint32_t)(now_ms-g_last_rx_tick)>=SLAVE_REPLY_DELAY_MS && SlaveRuntime_DeadlineReached(now_ms,g_tx_not_before_tick))
+    {
+        uint8_t p[11], frame[24];uint16_t flow,crc;
+        if(SlaveWebControl_Prepare(p,&flow,now_ms))
+        {
+            frame[0]=0xAAU;frame[1]=0x55U;frame[2]=4U;frame[3]=WEB_REQUEST;frame[4]=FRAME_ROLE_SLAVE;frame[5]=g_local_group;
+            frame[6]=FRAME_ROLE_MASTER;frame[7]=g_local_group;SlaveRuntime_WriteU16(frame+8,flow);frame[10]=11U;memcpy(frame+11,p,11U);
+            crc=SlaveRuntime_Crc16(frame+2,20U);SlaveRuntime_WriteU16(frame+22,crc);
+            SlaveWebControl_Sent(LORA_SendData(frame,24U),HAL_GetTick());g_tx_not_before_tick=HAL_GetTick()+SLAVE_REPLY_DELAY_MS;
+        }
+    }
+
 }

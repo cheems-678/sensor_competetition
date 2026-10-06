@@ -1,0 +1,356 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>智能通风 · 热点控制台</title><style>*{box-sizing:border-box}html{color-scheme:dark}body{margin:0;background:#050b16;color:#dfebfa;font:14px 'Microsoft YaHei UI',system-ui,sans-serif}button,input,select{font:inherit}button{cursor:pointer}button:disabled,input:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,canvas:focus-visible,summary:focus-visible{outline:2px solid #55dce6;outline-offset:3px}button,select,input[type=number]{color:#c2d7ed;background:#11243a;border:1px solid #29435d;border-radius:6px;padding:9px 12px}button:hover:not(:disabled){background:#1b3a55}.primary{background:#135074;border-color:#28779a}.shell{max-width:1440px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:24px}.brand{display:flex;gap:14px;align-items:center}.brandicon{font-size:27px;color:#7cedf4;border:1px solid #265069;border-radius:12px;padding:8px 14px;background:#112a3b}h1{font-size:23px;margin:0}header p{color:#7995af;font-size:12px;margin:6px 0 0}.workspace{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px}nav{display:flex;flex-direction:column;gap:5px}nav button{display:flex;gap:11px;align-items:center;text-align:left;border-color:transparent;background:transparent;padding:13px;color:#7f9bb7}nav button[aria-current=page]{color:#9ef5f8;background:#12394c;border:1px solid #245367}nav span{color:#5e98b3;font-size:18px}.pagehead{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.pagehead h2{font-size:20px;margin:0}.eyebrow{font:10px Consolas,monospace;letter-spacing:2px;color:#688ba6;margin-bottom:7px}.panel{background:#0c1829;border:1px solid #223b52;border-radius:10px;margin-bottom:16px;overflow:hidden}.panelhead{background:linear-gradient(90deg,#10283b,#101a30);padding:14px 18px;border-bottom:1px solid #233c53;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.panelhead h2{font-size:15px;margin:0}.badge,.tag{display:inline-block;font-size:11px;color:#8ba7c0;padding:6px 9px;border-radius:5px;background:#17293d;border:1px solid #2b445a}.online{color:#7cf2c9;background:#12362f;border-color:#255449}.delayed{color:#efcb80;background:#342c1e;border-color:#645030}.offline{color:#afbac8;background:#252a34;border-color:#414652}#status{min-width:175px;text-align:center}#masterStatus,#slaveStatus{min-width:180px;text-align:center}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:25px 18px;gap:18px}.metric label{display:block;color:#87a1bc;font-size:12px;margin-bottom:13px}.metric strong{font:500 32px Consolas,monospace;color:#e4f5ff;font-variant-numeric:tabular-nums}.metric small{font:12px system-ui;color:#7795ae;margin-left:6px}.compact{grid-template-columns:1fr;padding:18px;gap:18px}.compact .metric{display:flex;align-items:center;justify-content:space-between;gap:8px}.compact .metric label{margin:0}.compact .metric strong{font-size:25px}.row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px 18px;border-top:1px solid #1a3146;color:#87a1bc;font-size:12px}.row>span:last-child{color:#b9dbe8;text-align:right}.environmentpair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.overviewgrid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(250px,1fr);gap:18px}.stack{min-width:0}#model{width:100%;height:460px;display:block;touch-action:none;background:#060e1b}.modeltools{display:flex;gap:6px;padding:12px 18px}.modeltools button{padding:7px 13px}details{border-top:1px solid #20384f;padding:0 18px;font-size:12px;color:#91a9bf}summary{cursor:pointer;padding:12px 0;color:#79afc6;width:fit-content}details p{line-height:1.9;margin:0 0 15px}.legend{display:flex;gap:20px;padding:18px;color:#7893ad;font-size:12px}.master{color:#55dce6}.slave{color:#c0a1ff}#chart{display:block;width:100%;height:270px}.muted{color:#7995ae;font-size:12px;padding:0 18px;line-height:1.8}.controlgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.controlgrid .panel{padding-bottom:15px;margin:0}.fanicon,.windowicon{font-size:55px;text-align:center;color:#64c6db;margin:18px 0}.controlgrid h2:not(.panelhead h2){text-align:center}.reading{text-align:center;font:34px Consolas,monospace;margin:16px;color:#c1f5fd}.reading small{font:12px system-ui;color:#8cabc0;margin-left:6px}input[type=range]{display:block;width:calc(100% - 36px);margin:20px 18px;accent-color:#52cfdf}.inputrow{display:flex;gap:10px;padding:10px 18px}.inputrow>*{flex:1;min-width:0}.result{min-height:28px;padding:8px 18px;font-size:12px;color:#94c6d5}.weather{text-align:center}.weather #weatherIcon{font-size:100px;color:#ffe7a0;margin:30px}#rain{font-size:30px}.smokebody{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:20px;padding:30px}.smokescene{position:relative;text-align:center;min-height:170px;display:flex;flex-direction:column;justify-content:center;overflow:hidden}.smokescene strong{font:60px Consolas,monospace;z-index:1}.smokescene span{font-size:12px;color:#8eabc1;z-index:1}#smokeCloud{position:absolute;inset:0;opacity:.4;background:radial-gradient(ellipse,#6b9cb5 0%,transparent 70%);transition:opacity .4s}#smokeLevel{font-size:18px}.meter{height:8px;background:#173249;border-radius:5px;overflow:hidden}.meter>div{height:100%;width:0;background:#73dae6}#logs{height:450px;overflow:auto;padding:18px;font:12px/1.9 Consolas,system-ui;color:#89acc5;white-space:pre-wrap;overflow-wrap:anywhere}footer{display:flex;justify-content:space-between;gap:8px;margin-top:20px;color:#62829c;font-size:11px}.note{color:#8eabc1;font-size:12px}.page[hidden]{display:none!important}@media(max-width:960px){.environmentpair{grid-template-columns:1fr}.workspace{grid-template-columns:150px minmax(0,1fr);gap:16px}.overviewgrid{grid-template-columns:1fr}.compact{grid-template-columns:repeat(3,minmax(0,1fr))}.compact .metric{display:block}#model{height:370px}.metric strong{font-size:27px}}@media(max-width:600px){.shell{padding:16px}.workspace{display:block}header{align-items:flex-start;flex-wrap:wrap}h1{font-size:20px}.brandicon{font-size:22px;padding:7px 11px}nav{flex-direction:row;overflow-x:auto;gap:5px;margin-bottom:20px;padding-bottom:7px}nav button{white-space:nowrap;padding:10px 12px}nav span{display:none}.metrics,.compact{grid-template-columns:1fr;padding:18px}.metric{display:flex;justify-content:space-between;align-items:center}.metric label{margin:0}.controlgrid{grid-template-columns:1fr}.smokebody{grid-template-columns:1fr;padding:20px}.panelhead{padding:12px 15px}#model{height:330px}#logs{height:360px}footer{flex-wrap:wrap}}</style></head><body><div class="shell"><header><div class="brand"><div class="brandicon">▣</div><div><h1>智能通风 · 热点控制台</h1><p>GROUP 01 · 主从机统一监测</p></div></div><span id="status" class="badge offline" role="status">正在连接…</span></header><div class="workspace"><nav aria-label="功能导航"><button data-page="overview" aria-current="page"><span>▣</span>粮仓总览</button><button data-page="environment" ><span>◉</span>环境监测</button><button data-page="distance" ><span>↕</span>粮面测距</button><button data-page="rain" ><span>☂</span>雨滴监测</button><button data-page="smoke" ><span>◌</span>烟雾监测</button><button data-page="fans" ><span>✣</span>风机控制</button><button data-page="windows" ><span>▥</span>窗户控制</button><button data-page="logs" ><span>≡</span>操作记录</button></nav><main><div class="pagehead"><div><div class="eyebrow" id="pageCode">OVERVIEW</div><h2 id="pageTitle">粮仓总览</h2></div><span class="tag">本地热点</span></div><section id="page-overview" class="page" aria-label="粮仓总览" ><div class="overviewgrid"><article class="panel modelpanel"><div class="panelhead"><h2>粮仓示意</h2><span class="tag">交互视图</span></div><canvas id="model" tabindex="0" aria-label="可拖动旋转的粮仓示意模型"></canvas><div class="modeltools"><button id="zoomOut" aria-label="缩小模型">−</button><button id="zoomIn" aria-label="放大模型">＋</button><button id="resetModel">复位视角</button></div><details><summary>说明</summary><p>拖动旋转、滚轮或按钮缩放。仓体和粮面为结构示意；没有空仓距离和仓体尺寸标定，不推算粮位、储量或内部温度分布。</p></details></article><div class="stack"><article class="panel"><div class="panelhead"><h2>实时监测</h2><span id="overviewWeather" class="tag">天气未知</span></div><div class="metrics compact"><div class="metric"><label>主机温度</label><strong><span data-mirror="masterTemperature">--</span><small>°C</small></strong></div><div class="metric"><label>从机温度</label><strong><span data-mirror="temperature">--</span><small>°C</small></strong></div><div class="metric"><label>粮面距离</label><strong><span data-mirror="distance">--</span><small>cm</small></strong></div></div></article><article class="panel"><div class="panelhead"><h2>运行状态</h2></div><div class="row"><span>主机</span><span data-mirror="masterStatus">等待同步</span></div><div class="row"><span>从机</span><span data-mirror="slaveStatus">等待采样</span></div><div class="row"><span>灯带</span><span data-mirror="light">--</span></div><div class="row"><span>测距</span><span data-mirror="distanceState">--</span></div><div class="row"><span>网页控制</span><span id="controlLink">等待主机</span></div><details><summary>说明</summary><p>所有网页动作经主机协调。声音采集未启用；风机读数为PWM设置，窗口状态为动作诊断，不代表实测转速或机械开度。</p></details></article></div></div></section><section id="page-environment" class="page" aria-label="环境监测" hidden><div class="environmentpair"><article class="panel"><div class="panelhead"><h2>主机环境监测</h2><span id="masterStatus" class="badge offline">等待同步</span></div><div class="metrics"><div class="metric"><label>温度</label><strong><span id="masterTemperature">--</span><small>°C</small></strong></div><div class="metric"><label>相对湿度</label><strong><span id="masterHumidity">--</span><small>%</small></strong></div><div class="metric"><label>绝对气压</label><strong><span id="masterPressure">--</span><small>Pa</small></strong></div></div></article><article class="panel"><div class="panelhead"><h2>从机环境监测</h2><span id="slaveStatus" class="badge offline">等待同步</span></div><div class="metrics"><div class="metric"><label>温度</label><strong><span id="temperature">--</span><small>°C</small></strong></div><div class="metric"><label>相对湿度</label><strong><span id="humidity">--</span><small>%</small></strong></div><div class="metric"><label>绝对气压</label><strong><span id="pressure">--</span><small>Pa</small></strong></div></div></article></div><article class="panel"><div class="panelhead"><h2>主从机环境趋势</h2><select id="metric" aria-label="选择曲线"><option value="temperature">温度 · °C</option><option value="humidity">湿度 · %</option><option value="pressure">气压 · Pa</option></select></div><div class="legend"><span class="master">━━ 主机</span><span class="slave">━━ 从机</span><span>最近10分钟</span></div><canvas id="chart" aria-label="主从机环境实时曲线"></canvas><p id="empty" class="muted">等待有效采样…</p><details><summary>说明</summary><p>仅记录有效的新采样，失效留断点，不补齐或平滑数据。本次浏览会话最多1200个观测点，切页继续采集；从机重启清空会话。</p></details></article></section><section id="page-distance" class="page" aria-label="粮面测距" hidden><article class="panel"><div class="panelhead"><h2>探头到粮面距离</h2><span id="distanceState" class="tag">等待测量</span></div><div class="metrics"><div class="metric"><label>滤波距离</label><strong><span id="distance">--</span><small>cm</small></strong></div><div class="metric"><label>原始距离</label><strong><span id="distanceRaw">--</span><small>cm</small></strong></div><div class="metric"><label>回波脉宽</label><strong><span id="distancePulse">--</span><small>µs</small></strong></div></div><div class="row"><span>采样</span><span id="distanceInfo">--</span></div><details><summary>说明</summary><p>HC-SR04近距离试测范围10–50 cm，最近5次中位数。声速按约20 ℃估算；故障立即清空，源数据满2秒失效。尚无现场粮位/储量标定，不把距离换算为粮位百分比。</p></details></article></section><section id="page-rain" class="page" aria-label="雨滴监测" hidden><article class="panel weather"><div id="weatherIcon" aria-hidden="true">☀</div><h2 id="rain">--</h2><p class="muted">主机实测雨滴状态</p><div class="row"><span>光敏</span><span id="dark">--</span></div><div class="row"><span>灯带</span><span id="light">--</span></div><details><summary>说明</summary><p>雨滴状态不表示雨量；主机数据过期显示未知。灯带为最近成功写入的设置。</p></details></article></section><section id="page-smoke" class="page" aria-label="烟雾监测" hidden><article class="panel"><div class="panelhead"><h2>MQ-2 相对烟雾指数</h2><span class="tag">未标定</span></div><div class="smokebody"><div class="smokescene"><div id="smokeCloud" aria-hidden="true"></div><strong id="smokeIndex">--</strong><span>相对指数</span></div><div><h2 id="smokeLevel">等待采样</h2><div class="meter"><div id="smokeBar"></div></div><div class="row"><span>原始采样状态</span><span id="mq2state">等待采样</span></div></div></div><details><summary>说明</summary><p>沿用现场经验PA7参考点350/850/1500/2500 mV对应指数0/25/60/100，分段线性插值。不是ppm、百分比或消防报警判据，不做报警或自动联动。短暂延迟保留最近指数并提示待更新，不重新计算无效数据。</p></details></article><article class="panel"><div class="panelhead"><h2>模拟量</h2><span class="tag">PA7 · AO</span></div><div class="metrics"><div class="metric"><label>ADC原始值</label><strong><span id="mq2raw">--</span><small>计数</small></strong></div><div class="metric"><label>PA7输入电压</label><strong><span id="mq2pin">--</span><small>V</small></strong></div><div class="metric"><label>AO还原电压</label><strong><span id="mq2">--</span><small>V</small></strong></div></div></article></section><section id="page-fans" class="page" aria-label="风机控制" hidden><div class="controlgrid"><article class="panel"><div class="panelhead"><h2>风机 1</h2><span class="tag">主机</span></div><div class="fanicon" aria-hidden="true">✣</div><div class="reading"><label class="muted">当前设置 · </label><span id="fan1">--</span><small>% PWM</small></div><input id="fanRange1" type="range" min="0" max="100" value="0" aria-label="风机1占空比"><div class="inputrow"><input id="fanInput1" type="number" min="0" max="100" step="1" value="0" aria-label="风机1数值"><button id="fanSend1" class="primary">发送设置</button></div><div id="fanResult1" class="result" role="status">未发送</div></article><article class="panel"><div class="panelhead"><h2>风机 2</h2><span class="tag">主机</span></div><div class="fanicon" aria-hidden="true">✣</div><div class="reading"><span id="fan2">--</span><small>% PWM</small></div><input id="fanRange2" type="range" min="0" max="100" value="0" aria-label="风机2占空比"><div class="inputrow"><input id="fanInput2" type="number" min="0" max="100" step="1" value="0" aria-label="风机2数值"><button id="fanSend2" class="primary">发送设置</button></div><div id="fanResult2" class="result" role="status">未发送</div></article><article class="panel"><div class="panelhead"><h2>风机 3</h2><span class="tag">主机</span></div><div class="fanicon" aria-hidden="true">✣</div><div class="reading"><span id="fan3">--</span><small>% PWM</small></div><input id="fanRange3" type="range" min="0" max="100" value="0" aria-label="风机3占空比"><div class="inputrow"><input id="fanInput3" type="number" min="0" max="100" step="1" value="0" aria-label="风机3数值"><button id="fanSend3" class="primary">发送设置</button></div><div id="fanResult3" class="result" role="status">未发送</div></article><article class="panel"><div class="panelhead"><h2>风机 4</h2><span class="tag">主机</span></div><div class="fanicon" aria-hidden="true">✣</div><div class="reading"><span id="fan4">--</span><small>% PWM</small></div><input id="fanRange4" type="range" min="0" max="100" value="0" aria-label="风机4占空比"><div class="inputrow"><input id="fanInput4" type="number" min="0" max="100" step="1" value="0" aria-label="风机4数值"><button id="fanSend4" class="primary">发送设置</button></div><div id="fanResult4" class="result" role="status">未发送</div></article></div><details><summary>说明</summary><p>滑块释放或调节键释放后提交。四路独立，范围0–100%。提交受理不等于执行成功，ACK仅确认PWM设置；结果未知时不自动重试。忙碌请稍后手动操作。</p></details></section><section id="page-windows" class="page" aria-label="窗户控制" hidden><div class="controlgrid"><article class="panel"><div class="panelhead"><h2>窗口 1</h2><span class="tag">从机</span></div><div class="windowicon" aria-hidden="true">▥</div><h2 id="window1">--</h2><div class="row"><span>PWM</span><span><span id="pulse1">--</span> µs</span></div><div class="inputrow"><button id="windowOpen1" class="primary">打开窗户</button><button id="windowClose1">关闭窗户</button></div><div id="windowResult1" class="result" role="status">未发送</div></article><article class="panel"><div class="panelhead"><h2>窗口 2</h2><span class="tag">从机</span></div><div class="windowicon" aria-hidden="true">▥</div><h2 id="window2">--</h2><div class="row"><span>PWM</span><span><span id="pulse2">--</span> µs</span></div><div class="inputrow"><button id="windowOpen2" class="primary">打开窗户</button><button id="windowClose2">关闭窗户</button></div><div id="windowResult2" class="result" role="status">未发送</div></article><article class="panel"><div class="panelhead"><h2>窗口 3</h2><span class="tag">从机</span></div><div class="windowicon" aria-hidden="true">▥</div><h2 id="window3">--</h2><div class="row"><span>PWM</span><span><span id="pulse3">--</span> µs</span></div><div class="inputrow"><button id="windowOpen3" class="primary">打开窗户</button><button id="windowClose3">关闭窗户</button></div><div id="windowResult3" class="result" role="status">未发送</div></article><article class="panel"><div class="panelhead"><h2>窗口 4</h2><span class="tag">从机</span></div><div class="windowicon" aria-hidden="true">▥</div><h2 id="window4">--</h2><div class="row"><span>PWM</span><span><span id="pulse4">--</span> µs</span></div><div class="inputrow"><button id="windowOpen4" class="primary">打开窗户</button><button id="windowClose4">关闭窗户</button></div><div id="windowResult4" class="result" role="status">未发送</div></article></div><details><summary>说明</summary><p>连续旋转舵机：开/关运行300 ms后回停止脉宽，每路需空载校准。操作经主机协调，ACK只确认启动PWM已设置，不表示动作完成、自动停止成功或机械到位。</p></details></section><section id="page-logs" class="page" aria-label="操作记录" hidden><article class="panel"><div class="panelhead"><h2>本次会话记录</h2><span class="tag">最多200条</span></div><div id="logs" tabindex="0" aria-label="网页操作与连接记录"></div><details><summary>说明</summary><p>记录网页连接变化、显式操作和请求结果。刷新页面后清空；此处不是设备原始LoRa帧日志。</p></details></article></section></main></div><footer><span id="updated">尚未收到数据</span><span>ESP8266 · GROUP 01</span></footer></div><script>const defaultGranaryView = () => ({ yaw: -.55, pitch: .24, zoom: 1 });
+function adjustGranaryView(view, yaw = 0, pitch = 0, factor = 1) {
+    return {
+        yaw: (view.yaw + yaw) % (Math.PI * 2),
+        pitch: Math.max(-.15, Math.min(.85, view.pitch + pitch)),
+        zoom: Math.max(.65, Math.min(1.55, view.zoom * factor)),
+    };
+}
+const steel = [160, 185, 203];
+const trim = [98, 135, 164];
+const grain = [193, 151, 77];
+const faces = [];
+const segments = [];
+const circle = (angle, y, radius = .88) => [Math.cos(angle) * radius, y, Math.sin(angle) * radius];
+const face = (points, color, edge = false, thermal) => faces.push({ points, color, edge, thermal });
+const line = (a, b, color, width = 1) => segments.push({ points: [a, b], color, width });
+// Local procedural geometry. The cutaway and fill surface are fixed illustrations.
+for (let i = 0; i < 64; i++) {
+    const a = i / 64 * Math.PI * 2, b = (i + 1) / 64 * Math.PI * 2;
+    const cutaway = a >= Math.PI * 2 * 2 / 64 && a < Math.PI * 2 * 19 / 64;
+    face([circle(a, -1.16, 1.04), circle(b, -1.16, 1.04), circle(b, -1.28, 1.04), circle(a, -1.28, 1.04)], [54, 77, 98]);
+    face([[0, -1.16, 0], circle(a, -1.16, 1.04), circle(b, -1.16, 1.04)], [91, 115, 133]);
+    face([[0, .06, 0], circle(a, .06, .835), circle(b, .06, .835)], grain, false, { height: .06, angle: (a + b) / 2 });
+    for (let row = 0; row < 10; row++) {
+        const low = -.99 + row * .105, high = low + .105;
+        face([circle(a, low, .835), circle(b, low, .835), circle(b, high, .835), circle(a, high, .835)], grain, false, { height: (low + high) / 2, angle: (a + b) / 2 });
+    }
+    if (cutaway)
+        continue;
+    for (let row = 0; row < 20; row++) {
+        const low = -1.1 + row * .106, high = low + .106;
+        face([circle(a, low), circle(b, low), circle(b, high), circle(a, high)], steel, false, { height: (low + high) / 2, angle: (a + b) / 2 });
+    }
+    face([circle(a, 1.02, .96), circle(b, 1.02, .96), [0, 1.59, 0]], [119, 151, 176], true, { height: 1.02, angle: (a + b) / 2 });
+    for (let row = 0; row < 17; row++) {
+        const y = -1.06 + row * .124;
+        line(circle(a, y, .886), circle(b, y, .886), [60, 103, 127], .5);
+    }
+    line(circle(a, -1.1), circle(b, -1.1), trim, 2);
+    line(circle(a, 1.02, .89), circle(b, 1.02, .89), [186, 207, 220], 2);
+}
+for (const angle of [Math.PI * 2 * 2 / 64, Math.PI * 2 * 19 / 64]) {
+    face([circle(angle, -1.1, .84), circle(angle, -1.1), circle(angle, 1.02), circle(angle, 1.02, .84)], [204, 221, 231]);
+    line(circle(angle, -1.1), circle(angle, 1.02), [222, 238, 247], 2);
+}
+// A fixed access ladder and roof cap supply structural detail without device semantics.
+for (const angle of [2.14, 2.34])
+    line(circle(angle, -1.12, .98), circle(angle, 1.03, .98), [197, 215, 226], 2.5);
+for (let i = 0; i < 15; i++)
+    line(circle(2.14, -.97 + i * .135, .98), circle(2.34, -.97 + i * .135, .98), [166, 192, 211], 2);
+for (let i = 0; i < 32; i++) {
+    const a = i / 32 * Math.PI * 2, b = (i + 1) / 32 * Math.PI * 2;
+    face([circle(a, 1.6, .105), circle(b, 1.6, .105), circle(b, 1.67, .105), circle(a, 1.67, .105)], trim);
+    face([[0, 1.67, 0], circle(a, 1.67, .105), circle(b, 1.67, .105)], [193, 213, 226]);
+}
+function transform(point, view) {
+    const x = point[0] * Math.cos(view.yaw) + point[2] * Math.sin(view.yaw);
+    const z = -point[0] * Math.sin(view.yaw) + point[2] * Math.cos(view.yaw);
+    const y = point[1] - .19;
+    return [x, y * Math.cos(view.pitch) - z * Math.sin(view.pitch), y * Math.sin(view.pitch) + z * Math.cos(view.pitch)];
+}
+function drawGranary(context, width, height, view, seconds = 0) {
+    const scale = Math.min(height * .258, width * .23) * view.zoom;
+    const project = (p) => {
+        const perspective = 6 / (6 - p[2]);
+        return [width * .5 + p[0] * scale * perspective, height * .5 - p[1] * scale * perspective];
+    };
+    context.clearRect(0, 0, width, height);
+    const glow = context.createRadialGradient(width * .5, height * .48, 0, width * .5, height * .48, height * .85);
+    glow.addColorStop(0, '#122d43');
+    glow.addColorStop(1, '#060e1b');
+    context.fillStyle = glow;
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = '#89b0cc18';
+    context.lineWidth = .7;
+    for (let i = -6; i <= 6; i++) {
+        for (const points of [[[i * .4, -1.29, -2.4], [i * .4, -1.29, 2.4]], [[-2.4, -1.29, i * .4], [2.4, -1.29, i * .4]]]) {
+            const a = project(transform(points[0], view)), b = project(transform(points[1], view));
+            context.beginPath();
+            context.moveTo(a[0], a[1]);
+            context.lineTo(b[0], b[1]);
+            context.stroke();
+        }
+    }
+    const shadow = project(transform([0, -1.29, 0], view));
+    const shade = context.createRadialGradient(shadow[0], shadow[1], 0, shadow[0], shadow[1], scale * 1.25);
+    shade.addColorStop(0, '#03081199');
+    shade.addColorStop(1, '#03081100');
+    context.fillStyle = shade;
+    context.beginPath();
+    context.ellipse(shadow[0], shadow[1], scale * 1.4, scale * .27, 0, 0, Math.PI * 2);
+    context.fill();
+    const primitives = [
+        ...faces.map(f => ({ face: f, points: f.points.map(p => transform(p, view)), segment: undefined })),
+        ...segments.map(s => ({ face: undefined, points: s.points.map(p => transform(p, view)), segment: s })),
+    ].sort((a, b) => a.points.reduce((sum, p) => sum + p[2], 0) / a.points.length - b.points.reduce((sum, p) => sum + p[2], 0) / b.points.length);
+    for (const primitive of primitives) {
+        const points = primitive.points.map(project);
+        context.beginPath();
+        context.moveTo(points[0][0], points[0][1]);
+        for (const p of points.slice(1))
+            context.lineTo(p[0], p[1]);
+        if (primitive.face) {
+            const [a, b, c] = primitive.points;
+            const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            const normal = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            const length = Math.hypot(...normal) || 1;
+            const light = .68 + .32 * Math.abs((-normal[0] * .35 + normal[1] * .8 + normal[2] * .4) / length);
+            const thermal = primitive.face.thermal;
+            const color = primitive.face.color;
+            context.closePath();
+            context.fillStyle = `rgb(${color.map(value => Math.round(value * light)).join(',')})`;
+            context.fill();
+            if (primitive.face.edge) {
+                context.strokeStyle = '#c9dfed35';
+                context.lineWidth = .6;
+                context.stroke();
+            }
+        }
+        else if (primitive.segment) {
+            context.strokeStyle = `rgb(${primitive.segment.color.join(',')})`;
+            context.lineWidth = primitive.segment.width;
+            context.stroke();
+        }
+    }
+}
+
+
+let activePage='overview',trend=[],trendIds={master:null,slave:null},trendGap={master:false,slave:false},commandPending=null,commandDraft=null,pollBusy=false,pollTimer=null,logs=[],modelView={yaw:.55,pitch:.12,zoom:1},lastControlCheck=-Infinity,masterUptime=null;const fanDraftSet=new Set();
+const pageNames={overview:'粮仓总览',environment:'环境监测',distance:'粮面测距',rain:'雨滴监测',smoke:'烟雾监测',fans:'风机控制',windows:'窗户控制',logs:'操作记录'};
+function pruneTrend(){const cut=performance.now()-600000;while(trend.length&&(trend.length>1200||trend[0].at<cut))trend.shift()}
+function record(side,id,value){if(trendIds[side]===id)return;trendIds[side]=id;trendGap[side]=false;trend.push({at:performance.now(),side,value});pruneTrend()}
+function recordGap(side){if(trendGap[side])return;trendGap[side]=true;trend.push({at:performance.now(),side,value:null});pruneTrend()}
+function smokeIndex(mv){const refs=[[350,0],[850,25],[1500,60],[2500,100]];if(mv<=350)return 0;for(let i=1;i<4;i++)if(mv<=refs[i][0])return Math.round(refs[i-1][1]+(mv-refs[i-1][0])*(refs[i][1]-refs[i-1][1])/(refs[i][0]-refs[i-1][0]));return 100}
+function log(message){logs.push(new Date().toLocaleTimeString()+'  '+message);if(logs.length>200)logs.shift();text('logs',logs.join('\n'))}
+function canControl(){return !networkInterrupted&&performance.now()-lastSuccess<3000&&performance.now()-masterReceived+masterAge<3000}
+function updateControls(){const disabled=!canControl()||!!commandPending||!!commandDraft;text('controlLink',!canControl()?'主机离线 · 控制停用':commandPending||commandDraft?'正在等待结果':'可操作');for(let i=1;i<=4;i++)for(const key of ['fanRange','fanInput','fanSend','windowOpen','windowClose'])if($(key+i).disabled!==disabled)$(key+i).disabled=disabled}
+function updateOverview(){const rain=$('rain').textContent;text('overviewWeather',rain==='有雨'?'有雨':rain==='无雨'?'无雨':'天气未知');text('weatherIcon',rain==='有雨'?'☂':rain==='无雨'?'☀':'?')}
+function submitCommand(type,channel,value){
+  if(!canControl()||commandPending||commandDraft)return;
+  if(!Number.isInteger(value)||value<0||value>(type==='fan'?100:1)){text(type==='fan'?'fanResult'+channel:'windowResult'+channel,'请输入0–100整数');return}
+  const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);const id=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  commandDraft={request_id:id,type,channel,value,created:performance.now()};if(!pollBusy&&pollTimer!==null){clearTimeout(pollTimer);pollTimer=setTimeout(poll,0)}text(type==='fan'?'fanResult'+channel:'windowResult'+channel,'准备提交…');updateControls();
+}
+function commandMessage(state,d={}){
+  const reasons={invalid_request:'请求被拒绝 · 参数或请求格式错误',id_conflict:'请求编号冲突 · 未执行',local_busy:'从机已有网页请求 · 未执行',master_offline:'主机离线 · 未发送',queue_timeout:'无线发送排队超时 · 未发送',radio_tx_failed:'无线串口发送失败 · 结果未知',result_timeout:'等待设备结果超时 · 结果未知',device_rejected:'设备拒绝 · 检查参数与驱动诊断',master_busy:'设备忙 · 未执行，请稍后手动操作',remote_unknown:'主机未收到动作确认 · 结果未知',unknown_request:'结果记录不存在或已过期 · 结果未知',http_rejected:'HTTP请求被拒绝 · 未执行',id_mismatch:'返回的请求编号不匹配 · 结果未知',network_error:'网络请求中断 · 结果未知',draft_expired:'网页提交等待超时 · 未发送'};
+  const fallback={success:'PWM设置已确认',busy:'设备忙 · 未执行，请稍后手动操作',failed:'设备拒绝 · 检查参数与驱动诊断',unknown:'结果未知 · 不自动重试'};
+  let value=reasons[d.reason]||fallback[state]||fallback.unknown;
+  if(d.http_status>=400)value+='（HTTP '+d.http_status+'）';return value;
+}
+function progressCommand(data){
+  const c=commandPending;if(!c)return;
+  text(c.type==='fan'?'fanResult'+c.channel:'windowResult'+c.channel,data.phase==='radio_queued'||data.state==='queued'?'已受理 · 等待无线发送':'指令已发送 · 等待主机处理/设备确认');
+}
+function finishCommand(state,detail={}){
+  const c=commandPending||commandDraft;if(!c)return;
+  let message=commandMessage(state,detail);
+  if(state==='success')message=c.type==='fan'?'主机PWM设置已确认':'舵机PWM设置已确认 · 实际开度未知';
+  text(c.type==='fan'?'fanResult'+c.channel:'windowResult'+c.channel,message);
+  log((c.type==='fan'?'风机':'窗口')+c.channel+' → '+c.value+'：'+message+' · '+c.request_id+(detail.phase?' · '+detail.phase:'')+(detail.reason?' / '+detail.reason:''));
+  commandPending=commandDraft=null;updateControls();
+}
+async function controlFetch(url,options){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),1800);
+  try{
+    const response=await fetch(url,{...options,cache:'no-store',signal:controller.signal});let data;
+    try{data=await response.json()}catch(error){if(response.ok)throw error;data={state:'failed',phase:'rejected',reason:'http_rejected'}}
+    if(!data||typeof data!=='object')throw new Error('data');
+    return {response,data:{...data,http_status:response.status}};
+  }finally{clearTimeout(timer)}
+}
+async function serviceCommand(){
+  if(commandDraft){
+    if(!canControl()||performance.now()-commandDraft.created>=1000){finishCommand('unknown',{phase:'rejected',reason:'draft_expired'});return}
+    commandPending={...commandDraft,started:commandDraft.created};commandDraft=null;
+    log('提交 '+commandPending.type+' '+commandPending.channel+' · '+commandPending.request_id);
+    try{
+      const {response,data}=await controlFetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:commandPending.request_id,type:commandPending.type,channel:commandPending.channel,value:commandPending.value})});
+      if(!response.ok)finishCommand(data.state||'failed',{...data,reason:data.reason||'http_rejected'});
+      else if(data.request_id!==commandPending.request_id)finishCommand('unknown',{reason:'id_mismatch'});
+      else if(!['queued','waiting'].includes(data.state))finishCommand(data.state,data);
+      else progressCommand(data);
+    }catch(error){finishCommand('unknown',{reason:'network_error'})}
+    lastControlCheck=performance.now();
+  }else if(commandPending&&performance.now()-lastControlCheck>=1000){
+    if(performance.now()-commandPending.started>=8000){finishCommand('unknown',{phase:'awaiting_result',reason:'result_timeout'});return}
+    lastControlCheck=performance.now();
+    try{
+      const {response,data}=await controlFetch('/api/control?id='+commandPending.request_id,{});
+      if(!response.ok)finishCommand('unknown',{...data,reason:data.reason||'http_rejected'});
+      else if(data.request_id!==commandPending.request_id)finishCommand('unknown',{reason:'id_mismatch'});
+      else if(!['queued','waiting'].includes(data.state))finishCommand(data.state,data);
+      else progressCommand(data);
+    }catch(error){finishCommand('unknown',{reason:'network_error'})}
+  }
+}
+function switchPage(id){activePage=id;for(const key of Object.keys(pageNames))$('page-'+key).hidden=key!==id;for(const node of document.querySelectorAll('nav button')){if(node.dataset.page===id)node.setAttribute('aria-current','page');else node.removeAttribute('aria-current')}text('pageTitle',pageNames[id]);text('pageCode',id.toUpperCase());if(id==='environment')draw();if(id==='overview')renderModel()}
+function renderModel(){if(activePage!=='overview'||document.hidden)return;const c=$('model'),w=c.clientWidth||700,h=c.clientHeight||460,d=window.devicePixelRatio||1;c.width=w*d;c.height=h*d;const ctx=c.getContext('2d');if(!ctx)return;ctx.scale(d,d);drawGranary(ctx,w,h,modelView)}
+function setupUI(){
+  for(const node of document.querySelectorAll('nav button'))node.addEventListener('click',()=>switchPage(node.dataset.page));
+  for(let i=1;i<=4;i++){
+    const range=$('fanRange'+i),input=$('fanInput'+i);range.addEventListener('input',()=>{fanDraftSet.add(i);input.value=range.value});input.addEventListener('input',()=>{fanDraftSet.add(i);range.value=input.value});
+    let adjustingKeys=false;const keys=['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'];
+    range.addEventListener('keydown',e=>{if(keys.includes(e.key))adjustingKeys=true});range.addEventListener('keyup',e=>{if(adjustingKeys&&keys.includes(e.key)){adjustingKeys=false;submitCommand('fan',i,Number(range.value))}});range.addEventListener('blur',()=>{adjustingKeys=false});
+    range.addEventListener('change',()=>{if(!adjustingKeys)submitCommand('fan',i,Number(range.value))});$('fanSend'+i).addEventListener('click',()=>{if(!input.value.trim()){text('fanResult'+i,'请输入0–100整数');return}submitCommand('fan',i,Number(input.value))});
+    $('windowOpen'+i).addEventListener('click',()=>submitCommand('window',i,1));$('windowClose'+i).addEventListener('click',()=>submitCommand('window',i,0));
+  }
+  $('zoomIn').addEventListener('click',()=>{modelView.zoom=Math.min(1.7,modelView.zoom+.1);renderModel()});$('zoomOut').addEventListener('click',()=>{modelView.zoom=Math.max(.65,modelView.zoom-.1);renderModel()});$('resetModel').addEventListener('click',()=>{modelView={yaw:.55,pitch:.12,zoom:1};renderModel()});
+  let pointer=null;const c=$('model');c.addEventListener('pointerdown',e=>{pointer={id:e.pointerId,x:e.clientX,y:e.clientY};c.setPointerCapture(e.pointerId)});c.addEventListener('pointermove',e=>{if(!pointer||pointer.id!==e.pointerId)return;modelView.yaw+=(e.clientX-pointer.x)*.008;modelView.pitch=Math.max(-.55,Math.min(.55,modelView.pitch+(e.clientY-pointer.y)*.006));pointer.x=e.clientX;pointer.y=e.clientY;renderModel()});for(const event of ['pointerup','pointercancel','lostpointercapture'])c.addEventListener(event,()=>{pointer=null});c.addEventListener('wheel',e=>{e.preventDefault();modelView.zoom=Math.max(.65,Math.min(1.7,modelView.zoom-e.deltaY*.001));renderModel()},{passive:false});c.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();if(e.key==='ArrowLeft')modelView.yaw-=.1;if(e.key==='ArrowRight')modelView.yaw+=.1;if(e.key==='ArrowUp')modelView.pitch=Math.min(.55,modelView.pitch+.1);if(e.key==='ArrowDown')modelView.pitch=Math.max(-.55,modelView.pitch-.1);renderModel()}});log('热点控制台已打开');updateControls();updateOverview();
+}
+
+'use strict';
+const $=id=>document.getElementById(id);
+const DISPLAY_HOLD_MS=5000, BADGE_SETTLE_MS=2000, badges=Object.create(null);
+let lastSeq=null,lastUptime=null,lastSuccess=-Infinity,gap=false,networkInterrupted=false;
+let mqReceived=-Infinity,mqAge=Infinity,mqReportedValid=false,mqLabel='等待采样';
+let distanceReceived=-Infinity,distanceAge=Infinity;
+let bmeReceived=-Infinity,bmeAge=Infinity,bmeReportedValid=false;
+let masterReceived=-Infinity,masterAge=Infinity,masterBmeReceived=-Infinity,masterBmeAge=Infinity,masterSyncDelayed=false,masterBmeReportedValid=false;
+function text(id,value){const node=$(id),next=String(value);if(node.textContent!==next)node.textContent=next;if(document.querySelectorAll)for(const mirror of document.querySelectorAll('[data-mirror="'+id+'"]'))if(mirror.textContent!==next)mirror.textContent=next}
+function badge(id,value,cls,immediate=false,key=cls+'|'+value){
+  const now=performance.now();let state=badges[id];
+  if(!state)state=badges[id]={shown:null,candidate:key,since:now};
+  if(state.candidate!==key){state.candidate=key;state.since=now}
+  if(immediate||state.shown===null||state.shown===key||now-state.since>=BADGE_SETTLE_MS){
+    const changed=state.shown!==key;state.shown=key;if(changed&&(id==='status'||id==='masterStatus'))log(value);text(id,value);if($(id).className!==cls)$(id).className=cls;
+  }
+}
+function clearValues(){['temperature','humidity','pressure'].forEach(k=>text(k,'--'))}
+function clearMq(){text('smokeIndex','--');text('smokeLevel','数据不可用');$('smokeBar').style.width='0%';['mq2','mq2raw','mq2pin'].forEach(k=>text(k,'--'))}
+function clearMasterBme(){['masterTemperature','masterHumidity','masterPressure'].forEach(k=>text(k,'--'))}
+function clearMaster(){recordGap('master');
+  clearMasterBme();['rain','dark','light',...Array.from({length:4},(_,i)=>'fan'+(i+1))].forEach(k=>text(k,'--'));
+  badge('masterStatus','主机离线或尚未同步','badge offline',true);
+  masterReceived=masterBmeReceived=-Infinity;masterBmeAge=Infinity;masterBmeReportedValid=false;
+}
+function clearWindows(){for(let i=1;i<=4;i++){text('window'+i,'--');text('pulse'+i,'--')}}
+function refreshMaster(force=false){
+  const now=performance.now(),linkAge=now-masterReceived+masterAge,age=now-masterBmeReceived+masterBmeAge;
+  if(linkAge>=DISPLAY_HOLD_MS){clearMaster();return}
+  if(age>=2000)recordGap('master');if(age>=DISPLAY_HOLD_MS)clearMasterBme();
+  const delayed=masterSyncDelayed||linkAge>=3000,bmeDelayed=!masterBmeReportedValid||age>=2000;
+  badge('masterStatus',delayed?'同步延迟 · 显示最近数据':age>=DISPLAY_HOLD_MS?'主机在线 · 温湿压无效':bmeDelayed?'主机在线 · 温湿压待更新':'主机在线 · LoRa 同步',
+    'badge '+(delayed||bmeDelayed?'delayed':'online'),force||age>=DISPLAY_HOLD_MS);
+}
+function updateMaster(m,elapsed){
+  if(!m||m.online!==true||!Number.isFinite(m.rx_age_ms)||m.rx_age_ms<0||m.rx_age_ms+elapsed>=3000){recordGap('master');masterSyncDelayed=true;refreshMaster();return}
+  const first=masterReceived===-Infinity;
+  if(masterUptime!==null&&Number.isFinite(m.uptime_ms)&&m.uptime_ms<masterUptime){trend=trend.filter(p=>p.side!=='master');trendIds.master=null;trendGap.master=false;masterBmeReceived=-Infinity;masterBmeAge=Infinity}masterUptime=m.uptime_ms;
+  masterReceived=performance.now();masterAge=m.rx_age_ms+elapsed;masterSyncDelayed=false;
+  const good=m.valid===true&&Number.isFinite(m.age_ms)&&m.age_ms>=0&&m.age_ms+elapsed<2000&&['temperature_x10','humidity_x10','pressure_pa'].every(k=>Number.isFinite(m[k]));
+  masterBmeReportedValid=good;
+  if(good)record('master',m.sample_seq,{temperature:m.temperature_x10/10,humidity:m.humidity_x10/10,pressure:m.pressure_pa});else recordGap('master');
+  if(good){masterBmeReceived=performance.now();masterBmeAge=m.age_ms+elapsed;text('masterTemperature',(m.temperature_x10/10).toFixed(1));text('masterHumidity',(m.humidity_x10/10).toFixed(1));text('masterPressure',m.pressure_pa.toFixed(0))}
+  text('rain',m.rain===0?'无雨':m.rain===1?'有雨':'--');text('dark',m.dark===0?'明亮':m.dark===1?'暗':'--');text('light',m.light_on===0?'关闭':m.light_on===1?'开启':'--');
+  for(let i=0;i<4;i++){const duty=Array.isArray(m.fan_pwm)?m.fan_pwm[i]:null;text('fan'+(i+1),Number.isInteger(duty)&&duty>=0&&duty<=100?duty:'--');if(Number.isInteger(duty)&&duty>=0&&duty<=100&&!fanDraftSet.has(i+1)){ $('fanRange'+(i+1)).value=String(duty);$('fanInput'+(i+1)).value=String(duty);fanDraftSet.add(i+1)}}
+  refreshMaster(first);
+}
+function refreshLocal(force=false){
+  const now=performance.now(),age=now-bmeReceived+bmeAge,mAge=now-mqReceived+mqAge;
+  if(age>=2000)addGap();
+  if(age>=DISPLAY_HOLD_MS)clearValues();
+  badge('slaveStatus',age>=DISPLAY_HOLD_MS?'从机温湿压无效或过期':!bmeReportedValid||age>=2000?'从机温湿压待更新':'从机本地采集 · 数据正常',
+    'badge '+(age>=DISPLAY_HOLD_MS?'offline':!bmeReportedValid||age>=2000?'delayed':'online'),force||age>=DISPLAY_HOLD_MS);
+  if(mAge>=DISPLAY_HOLD_MS)clearMq();
+  if(mAge>=2000&&mAge<DISPLAY_HOLD_MS)text('smokeLevel','最近读数 · 等待更新');
+  const mqMode=mAge>=DISPLAY_HOLD_MS?'expired':!mqReportedValid||mAge>=2000?'delayed':'normal';
+  badge('mq2state',mqMode==='expired'?'采样无效或过期':mqMode==='delayed'?'最近采样 · 等待更新':mqLabel,'note',force||mqMode==='expired',mqMode);
+}
+function updateMq(m,elapsed){
+  mqReportedValid=!!m&&m.valid===true&&[m.raw,m.pa7_mv,m.ao_mv,m.age_ms,m.sample_seq].every(Number.isFinite)&&m.age_ms>=0&&m.age_ms+elapsed<2000&&m.raw>=0&&m.raw<=4095;
+  if(!mqReportedValid)return;
+  mqReceived=performance.now();mqAge=m.age_ms+elapsed;
+  text('mq2',(m.ao_mv/1000).toFixed(3));text('mq2pin',(m.pa7_mv/1000).toFixed(3));text('mq2raw',m.raw);
+  mqLabel=m.raw===4095?'ADC 已满量程':'采样 #'+m.sample_seq+' · 未标定';
+  const index=smokeIndex(m.pa7_mv);text('smokeIndex',index);text('smokeLevel',index<=5?'接近基线':index<25?'轻微升高':index<60?'轻度烟雾参考':index<80?'较高烟雾参考':'浓烟参考');const color=index<25?'#68d9c0':index<60?'#f2c178':'#ff9b84';$('smokeBar').style.background=color;$('smokeIndex').style.color=color;$('smokeBar').style.width=index+'%';$('smokeCloud').style.opacity=String(.15+index/140);
+}
+function clearDistance(label='测量无效或过期'){
+  ['distance','distanceRaw','distancePulse','distanceInfo'].forEach(k=>text(k,'--'));
+  text('distanceState',label);distanceReceived=-Infinity;distanceAge=Infinity;
+}
+function refreshDistance(){
+  if(performance.now()-distanceReceived+distanceAge>=2000&&distanceReceived!==-Infinity)clearDistance();
+}
+function updateDistance(u,elapsed){
+  const good=u&&u.valid===true&&[u.distance_mm,u.raw_mm,u.pulse_us,u.filter_count,u.sample_seq,u.age_ms].every(Number.isFinite)&&
+    u.age_ms>=0&&u.age_ms+elapsed<2000&&u.distance_mm>=100&&u.distance_mm<=500&&u.raw_mm>=100&&u.raw_mm<=500&&u.filter_count>=1&&u.filter_count<=5;
+  if(!good){
+    const labels={1:'初始化失败',2:'触发失败',3:'Echo持续为高',4:'未收到有效回波',5:'回波异常',6:'超出10–50 cm范围'};
+    clearDistance(u&&labels[u.error]||'测量无效或过期');return;
+  }
+  distanceReceived=performance.now();distanceAge=u.age_ms+elapsed;
+  text('distance',(u.distance_mm/10).toFixed(1));text('distanceRaw',(u.raw_mm/10).toFixed(1));text('distancePulse',u.pulse_us);
+  text('distanceState','测量有效');text('distanceInfo','采样 #'+u.sample_seq+' · 滤波 '+u.filter_count+'/5');
+}
+function updateWindows(w){
+  if(!Array.isArray(w)){clearWindows();return}
+  for(let i=0;i<4;i++){
+    const v=w[i],good=v&&Number.isInteger(v.state)&&Number.isFinite(v.pulse_us)&&Number.isInteger(v.error),labels={0:'未启动',4:'故障',5:'停止',6:'动作中'};
+    text('window'+(i+1),good?(v.error!==0?'故障 · '+({1:'PWM启动失败',2:'PWM更新失败',3:'配置异常'}[v.error]||'错误码 '+v.error):labels[v.state]||'状态未知'):'--');text('pulse'+(i+1),good?v.pulse_us:'--');
+  }
+}
+function refreshConnection(force=false){
+  const age=performance.now()-lastSuccess;
+  if(age>=DISPLAY_HOLD_MS){clearWindows();badge('status','数据中断 · 正在重连','badge offline',true);text('updated','检查热点连接或从机供电');return}
+  const delayed=networkInterrupted||age>=3000;
+  badge('status',delayed?'连接延迟 · 显示最近数据':'已连接 · 本地监测','badge '+(delayed?'delayed':'online'),force);
+}
+function resetSession(){
+  masterUptime=null;trend=[];trendIds={master:null,slave:null};trendGap={master:false,slave:false};if(commandPending)finishCommand('unknown');lastSeq=null;gap=false;lastSuccess=-Infinity;
+  mqReceived=bmeReceived=masterReceived=masterBmeReceived=-Infinity;mqAge=bmeAge=masterAge=masterBmeAge=Infinity;
+  mqReportedValid=bmeReportedValid=masterBmeReportedValid=false;
+  clearValues();clearMq();clearMaster();clearWindows();clearDistance();draw();
+}
+function addGap(){recordGap('slave');if(!gap){gap=true;draw()}}
+function draw(){
+  if($('page-environment').hidden)return;
+  const c=$('chart'),w=c.clientWidth||700,h=270,d=window.devicePixelRatio||1;c.width=w*d;c.height=h*d;
+  const ctx=c.getContext('2d');ctx.scale(d,d);ctx.clearRect(0,0,w,h);pruneTrend();
+  const key=$('metric').value,points=trend.filter(p=>p.value),values=points.map(p=>p.value[key]);
+  text('empty',values.length?'线性连点 · 无效采样留空':'等待有效采样…');if(!values.length)return;
+  let lo=Math.min(...values),hi=Math.max(...values),pad=Math.max((hi-lo)*.15,key==='pressure'?100:.5);lo-=pad;hi+=pad;
+  const left=65,right=w-18,top=20,bottom=h-35,end=performance.now(),start=Math.min(...trend.map(p=>p.at),end-1000);
+  ctx.font='11px system-ui';ctx.textBaseline='middle';for(let i=0;i<4;i++){const y=top+(bottom-top)*i/3;ctx.strokeStyle='#233c53';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();ctx.fillStyle='#7994b0';ctx.fillText((hi-(hi-lo)*i/3).toFixed(key==='pressure'?0:1),3,y)}
+  for(const side of ['master','slave']){ctx.strokeStyle=side==='master'?'#55dce6':'#c0a1ff';ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=2;ctx.beginPath();let connected=false;for(const p of trend.filter(p=>p.side===side)){if(!p.value){connected=false;continue}const x=left+(right-left)*(p.at-start)/Math.max(1000,end-start),y=bottom-(p.value[key]-lo)/(hi-lo)*(bottom-top);if(connected)ctx.lineTo(x,y);else ctx.moveTo(x,y);connected=true;}ctx.stroke();for(const p of points.filter(p=>p.side===side)){ctx.beginPath();ctx.arc(left+(right-left)*(p.at-start)/Math.max(1000,end-start),bottom-(p.value[key]-lo)/(hi-lo)*(bottom-top),2,0,Math.PI*2);ctx.fill();}}
+  ctx.fillStyle='#7994b0';ctx.fillText(new Date(Date.now()-(end-start)).toLocaleTimeString(),left,h-10);ctx.fillText(new Date().toLocaleTimeString(),Math.max(left,right-55),h-10);
+}
+async function poll(){
+  if(pollBusy)return;pollBusy=true;clearTimeout(pollTimer);
+  const started=performance.now();let timer;
+  try{
+    await serviceCommand();const telemetryStarted=performance.now(),controller=new AbortController();timer=setTimeout(()=>controller.abort(),1800);
+    const response=await fetch('/api/telemetry',{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP');
+    const data=await response.json();if(!Number.isFinite(data.uptime_ms)||!Number.isFinite(data.sample_seq))throw new Error('data');
+    if(lastUptime!==null&&data.uptime_ms<lastUptime)resetSession();
+    const first=lastSuccess===-Infinity;
+    lastUptime=data.uptime_ms;lastSuccess=performance.now();networkInterrupted=false;
+    const elapsed=lastSuccess-telemetryStarted;
+    updateDistance(data.ultrasonic,elapsed);updateMq(data.mq2,elapsed);updateMaster(data.master,elapsed);updateWindows(data.windows);
+    bmeReportedValid=data.valid===true&&Number.isFinite(data.age_ms)&&data.age_ms>=0&&data.age_ms+elapsed<2000&&['temperature_x10','humidity_x10','pressure_pa'].every(k=>Number.isFinite(data[k]));
+    if(!bmeReportedValid)addGap();
+    else{
+      bmeReceived=lastSuccess;bmeAge=data.age_ms+elapsed;
+      const v={temperature:data.temperature_x10/10,humidity:data.humidity_x10/10,pressure:data.pressure_pa};
+      Object.keys(v).forEach(k=>text(k,v[k].toFixed(k==='pressure'?0:1)));
+      text('updated','最近读取 '+new Date().toLocaleTimeString()+' · 采样 #'+data.sample_seq);
+      if(data.sample_seq!==lastSeq){lastSeq=data.sample_seq;gap=false;record('slave',data.sample_seq,v);draw()}
+    }
+    refreshLocal(first);refreshConnection(first);updateControls();updateOverview();draw();
+  }catch(error){
+    networkInterrupted=true;masterSyncDelayed=true;recordGap('master');addGap();refreshLocal();refreshMaster();refreshConnection();
+  }finally{clearTimeout(timer);pollBusy=false;pollTimer=setTimeout(poll,commandDraft?100:Math.max(100,1000-(performance.now()-started)))}
+}
+setInterval(()=>{refreshLocal();refreshMaster();refreshConnection();refreshDistance();updateControls();updateOverview()},250);
+if(document.addEventListener)document.addEventListener('visibilitychange',()=>{if(!document.hidden){renderModel();draw()}});$('metric').addEventListener('change',draw);window.addEventListener('resize',()=>{draw();renderModel()});setupUI();draw();renderModel();poll();
+</script></body></html>

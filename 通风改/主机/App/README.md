@@ -1,5 +1,17 @@
 # 主机 v4 架构
 
+- 热点真实控制优化：现有runtime新增单条有界网页等待槽，仅等待在途遥测，接收tick起2000 ms到期取消；已有控制事务不抢占，网页先于后续遥测。诊断计数放现有MasterRuntimeDiag；LoRa载荷不变，实际风机/舵机驱动入口不绕过。测试沿既有tests，构建/留档沿MDK输出，用户配套烧录。
+## 粮面测距汇总（2026-10-06）
+
+- 按共同PROTOCOL_V4.md接受42字节/flags38从机数据并输出42字节/flags3B或3F，保持18/26/34兼容。lora_protocol.*校验测距四字段；master_runtime.*保存测距快照及接收tick，Bsp/lora.c实际发送队列以原年龄基准累计并过期填FFFF、更新CRC，不能重试续时。
+- 沿现有tests/覆盖协议边界、runtime延迟与真实UART排队/重试/回绕；所有控制和广播保持。Keil后交付主机hcsr04_chain_20261006角色留档，不自动烧录。
+
+## 从机ESP网页的主机状态下发
+
+- 按共同 `PROTOCOL_V4.md` 新增03主机状态帧；共用线格式在 `../../monitor_status_wire.h`，通过相对路径引入。现有 `master_runtime.*` 提供准备快照接口，`Bsp/lora.c` 仅在现有业务/接收均空闲时实际发送，不引入线程、阻塞采样或业务队列状态积压，不改变引脚或LoRa参数。
+- 每秒尝试一次，无控制室电脑也发送；状态包含本机BME、雨滴、光敏、灯带成功写入状态及四路PWM设置。失败等下一周期最新快照，避免占住控制报文。测试沿用tests，产物/角色HEX仍在既有输出目录；不自动烧录。
+- 2026-10-05交付正常默认HEX及同内容 `MDK-ARM/LoraSlaveV1.0/LoraSlaveV1_master_combined_monitor_20261005.hex/.elf/.map`。Keil 0错误/0警告，Flash载荷17600字节、RAM5336字节；默认HEX SHA256 `05870A31048491272BB83C472F386630320AC18C6EF1256683324D5782AE4E7F`。runtime23组、协议8组、实际UART8组及雨滴/光敏/四风机回归通过；三板新状态与原控制事务隔离及五分钟虚拟运行通过。`MasterRuntimeDiag.status_attempt_count` 查看空闲发送准备次数，具体成功/丢失以从机 `SlaveMasterStatusDiag` 接收诊断及实板验收为准，不自动烧录。
+
 ## MQ-2 转发约定
 
 遵循 `../../PROTOCOL_V4.md` 的34字节追加布局，兼容旧18/26字节从机。MQ-2独立于BME；汇总及UART排队/重试累计已知年龄，达到2秒填FFFF。雨滴仍在偏移17；控制指令不变，完成Keil和模拟测试后交付，不自动烧录。
@@ -110,3 +122,8 @@ USART2 ISR -> 环形缓冲 -> LoraP2PRX -> 事件队列 -> MasterRuntime
 - 上电等待至少 2 秒，每次实际读取间隔至少 2 秒；读取时保持 USART2 中断可用，所有边沿等待必须有超时。
 - `MasterDht11Diag` 仅保存在 RAM，记录最后错误、响应脉宽、原始五字节和每位脉宽，不通过 LoRa 插入调试文本。
 - 后续换引脚仅修改驱动 GPIO 宏并核对板级复用关系，未经确认不变更实际接线。
+# 热点控制台协调扩展（2026-10-06）
+
+- 用户批准网页控制统一经主机；新增12请求/21结果仅本组从机与主机互通，共用../../web_control_wire.h。master_runtime沿用单一pending事务记录网页来源/8字节请求编号，窗户走原11/20流程，风机走原PWM驱动。最近4条结果保留30秒，重复编号参数不一致拒绝；控制室事务和网页指令先到先执行，busy拒绝，不抢占、不自动补发。
+- 新逻辑在现有runtime/协议中，测试沿用主机tests及控制室三板模拟；新增协议不得转发控制室或结束其事务。交付独立角色HEX/ELF/map，Keil验证，保留原产物，不自动烧录。
+- 2026-10-06交付：`MDK-ARM/LoraSlaveV1.0/LoraSlaveV1_master_web_console_20261006.hex`，配套ELF/map与默认产物一致；SHA256 `3E9B351B2677F21DD7F9C631EFFC657D604DE8E163A5190A24020E13A487A51F`。Keil 0错误/0警告，Code18368/RO316/RW116/ZI5300，Flash18800/RAM5416字节。runtime/协议/UART新增控制边界通过；真实三板15组1779检查通过。实际HEX记录校验和、64KiB Flash范围、向量和角色留档一致性通过。配套更新从机，旧留档保留；未自动操作实板。

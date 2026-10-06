@@ -20,6 +20,7 @@
 #include "slave_servo_test.h"
 #include "slave_esp_web.h"
 #include "slave_mq2.h"
+#include "slave_hcsr04.h"
 #endif
 
 void SystemClock_Config(void);
@@ -60,15 +61,18 @@ int main(void)
        Uninitialized acoustic service returns invalid telemetry values. */
     SlaveServoTest_InitManual(HAL_GetTick());
     SlaveMq2_Init(HAL_GetTick());
+    SlaveHcsr04_Init(HAL_GetTick());
     SlaveEspWeb_Init(HAL_GetTick());
 
     for (;;)
     {
         SlaveServoTest_Process(HAL_GetTick());
         SlaveMq2_Process(HAL_GetTick());
+        SlaveHcsr04_Process(HAL_GetTick());
         LoraP2PTrans();
         SlaveServoTest_Process(HAL_GetTick());
         SlaveMq2_Process(HAL_GetTick());
+        SlaveHcsr04_Process(HAL_GetTick());
         SlaveEspWeb_Process(HAL_GetTick());
         SlaveServoTest_Process(HAL_GetTick());
     }

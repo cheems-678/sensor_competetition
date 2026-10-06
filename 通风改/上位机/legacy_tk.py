@@ -41,6 +41,8 @@ class LoRaProtocol:
     TELEMETRY_SIZE = 26
     MQ2_TELEMETRY_SIZE = 34
     MQ2_MAX_AGE_MS = 2000
+    ULTRASONIC_TELEMETRY_SIZE = 42
+    ULTRASONIC_MAX_AGE_MS = 2000
     FLAG_MASTER_BME = 0x01
     FLAG_DUAL_BME = 0x02
     FLAG_SLAVE_ONLINE = 0x04
@@ -254,21 +256,26 @@ class LoRaProtocol:
             valid = payload[0] in (0x00, 0x01, 0x03, 0x07)
         elif len(payload) == cls.TELEMETRY_SIZE:
             valid = payload[0] in (0x0B, 0x0F)
-        elif len(payload) == cls.MQ2_TELEMETRY_SIZE:
-            valid = payload[0] in (0x1B, 0x1F)
+        elif len(payload) in (cls.MQ2_TELEMETRY_SIZE, cls.ULTRASONIC_TELEMETRY_SIZE):
+            valid = payload[0] in ((0x1B, 0x1F) if len(payload) == cls.MQ2_TELEMETRY_SIZE else (0x3B, 0x3F))
             raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
             if (raw, pa7_mv, ao_mv, age_ms) != (cls.UINT16_INVALID,) * 4:
                 valid = valid and (raw <= 4095 and pa7_mv <= 3600
                                    and ao_mv <= 7200 and age_ms < cls.MQ2_MAX_AGE_MS)
         else:
             raise ValueError("invalid telemetry payload length")
+        if len(payload) == cls.ULTRASONIC_TELEMETRY_SIZE:
+            distance, raw, pulse, age = struct.unpack_from("<4H", payload, 34)
+            if (distance, raw, pulse, age) != (cls.UINT16_INVALID,) * 4:
+                valid = valid and (100 <= distance <= 500 and 100 <= raw <= 500
+                                   and 0 < pulse < 10000 and age < cls.ULTRASONIC_MAX_AGE_MS)
         if not valid:
             raise ValueError("invalid telemetry payload layout")
 
     @classmethod
     def decode_telemetry(cls, payload: bytes) -> dict:
         cls._validate_telemetry_payload(payload)
-        extended = len(payload) in (cls.TELEMETRY_SIZE, cls.MQ2_TELEMETRY_SIZE)
+        extended = len(payload) in (cls.TELEMETRY_SIZE, cls.MQ2_TELEMETRY_SIZE, cls.ULTRASONIC_TELEMETRY_SIZE)
         # Decode the historical wire slots first; replace them for dual BME.
         values = struct.unpack("<BhHIHHBhH", payload[:cls.LEGACY_TELEMETRY_SIZE])
 
@@ -294,7 +301,7 @@ class LoRaProtocol:
             "master_temperature_c": temperature(values[7]),
             "master_humidity_pct": humidity(values[8]),
         }
-        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F, 0x1B, 0x1F)
+        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F, 0x1B, 0x1F, 0x3B, 0x3F)
         master_bme = decoded["flags"] == cls.FLAG_MASTER_BME or dual_bme
         decoded.update(
             master_bme_temperature_c=decoded["slave_temperature_c"] if master_bme else None,
@@ -328,11 +335,17 @@ class LoRaProtocol:
                     sound_rms_2=None if sound_right == cls.UINT32_INVALID else sound_right,
                 )
         decoded["mq2"] = dict(valid=False, raw=None, pa7_mv=None, ao_mv=None, age_ms=None)
-        if len(payload) == cls.MQ2_TELEMETRY_SIZE and decoded["slave_online"]:
+        if len(payload) in (cls.MQ2_TELEMETRY_SIZE, cls.ULTRASONIC_TELEMETRY_SIZE) and decoded["slave_online"]:
             raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
             if raw != cls.UINT16_INVALID:
                 decoded["mq2"] = dict(valid=True, raw=raw, pa7_mv=pa7_mv,
                                       ao_mv=ao_mv, age_ms=age_ms)
+        decoded["ultrasonic"] = dict(valid=False, distance_mm=None, raw_mm=None, pulse_us=None, age_ms=None)
+        if len(payload) == cls.ULTRASONIC_TELEMETRY_SIZE and decoded["slave_online"]:
+            distance, raw, pulse, age = struct.unpack_from("<4H", payload, 34)
+            if distance != cls.UINT16_INVALID:
+                decoded["ultrasonic"] = dict(valid=True, distance_mm=distance, raw_mm=raw,
+                                              pulse_us=pulse, age_ms=age)
         return decoded
 
 
@@ -451,6 +464,8 @@ class MonitorApp(tk.Tk):
     MQ2_LABELS = (("raw", "ADC 原始值", "计数"), ("pa7_mv", "PA7 输入电压", "mV"),
                   ("ao_mv", "AO 还原电压", "mV"), ("age_ms", "已知采样年龄", "ms"),
                   ("index", "相对烟雾指数", "/ 100"))
+    ULTRASONIC_LABELS = (("distance_mm", "仓顶到粮面距离", "cm"), ("raw_mm", "原始距离", "cm"),
+                         ("pulse_us", "回波脉宽", "μs"), ("age_ms", "已知采样年龄", "ms"))
     SOUND_HELP_TEXT = (
         "约63.7 ms完整采样窗的去直流RMS；界面约每秒查询一次\n"
         "单位：18位 PCM 计数，不是分贝；无有效数据显示 --"
@@ -473,6 +488,9 @@ class MonitorApp(tk.Tk):
         self.mq2_vars = {name: tk.StringVar(value="--") for name, _, _ in self.MQ2_LABELS}
         self.mq2 = dict(valid=False)
         self._mq2_received_at = self._mq2_source_age = None
+        self.ultrasonic = dict(valid=False)
+        self._ultrasonic_received_at = self._ultrasonic_source_age = None
+        self.ultrasonic_vars = {name: tk.StringVar(value="--") for name, _, _ in self.ULTRASONIC_LABELS}
         self.slave_link_var = tk.StringVar(value="从机链路：未知")
         self.last_telemetry_at = None
         self.duty_vars = {channel: tk.DoubleVar(value=0) for channel in self.FAN_PINS}
@@ -650,6 +668,16 @@ class MonitorApp(tk.Tk):
                 row=row * 2 + 1, column=column, sticky="ew", padx=pad(4), pady=(0, pad(6)))
         wrapped_label(smoke, text="PA7 0.35/0.85/1.50/2.50 V → 指数0/25/60/100\n经验参考，浓度未标定；指数不是百分比或ppm\n无有效数据时显示 --，采样有效不代表预热完成",
                       style="Muted.TLabel").grid(row=6, column=0, columnspan=2, sticky="ew")
+
+        distance = card(self.data_panel, "粮面测距 — HC-SR04")
+        distance.grid(row=4, column=0, sticky="ew", pady=(pad(12), 0))
+        for index, (name, label, unit) in enumerate(self.ULTRASONIC_LABELS):
+            column, row = index % 2, index // 2
+            distance.columnconfigure(column, weight=1, uniform="ultrasonic")
+            wrapped_label(distance, text=label, style="Muted.TLabel").grid(
+                row=row * 2, column=column, sticky="ew", padx=pad(4))
+            wrapped_label(distance, textvariable=self.ultrasonic_vars[name], style="Value.TLabel").grid(
+                row=row * 2 + 1, column=column, sticky="ew", padx=pad(4), pady=(0, pad(6)))
 
         fans = card(self.control_panel, "四路风机 PWM（0–100%）")
         fans.grid(row=0, column=0, sticky="ew", pady=(0, pad(10)))
@@ -850,6 +878,10 @@ class MonitorApp(tk.Tk):
         self._mq2_received_at = self._mq2_source_age = None
         for value in self.mq2_vars.values():
             value.set("--")
+        self.ultrasonic = dict(valid=False)
+        self._ultrasonic_received_at = self._ultrasonic_source_age = None
+        for value in self.ultrasonic_vars.values():
+            value.set("--")
         self.slave_link_var.set("从机链路：未知")
         self.last_telemetry_at = None
 
@@ -865,6 +897,18 @@ class MonitorApp(tk.Tk):
             if name == "index" and self.mq2["valid"]:
                 value = smoke_index(self.mq2.get("pa7_mv"))
             self.mq2_vars[name].set("--" if value is None else f"{value} {unit}")
+
+    def _refresh_ultrasonic(self, now: float):
+        if self.ultrasonic["valid"]:
+            age = self._ultrasonic_source_age + max(0, int((now - self._ultrasonic_received_at) * 1000))
+            if age >= LoRaProtocol.ULTRASONIC_MAX_AGE_MS:
+                self.ultrasonic = dict(valid=False)
+            else:
+                self.ultrasonic["age_ms"] = age
+        for name, _, unit in self.ULTRASONIC_LABELS:
+            value = self.ultrasonic.get(name) if self.ultrasonic["valid"] else None
+            text = "--" if value is None else (f"{value / 10:.1f} {unit}" if name in ("distance_mm", "raw_mm") else f"{value} {unit}")
+            self.ultrasonic_vars[name].set(text)
 
     def _request_telemetry(self, force_resample: bool = True):
         if self._window_busy():
@@ -1011,6 +1055,7 @@ class MonitorApp(tk.Tk):
                 self.fan_status_vars[channel].set(f"{duty}% 确认超时")
         now = time.monotonic()
         self._refresh_mq2(now)
+        self._refresh_ultrasonic(now)
         self._poll_telemetry(now)
         self._service_window(now)
         self.after(50, self._drain_events)
@@ -1038,6 +1083,10 @@ class MonitorApp(tk.Tk):
             self._mq2_received_at = now if received_at is None else received_at
             self._mq2_source_age = self.mq2["age_ms"]
             self._refresh_mq2(now)
+            self.ultrasonic = dict(values["ultrasonic"])
+            self._ultrasonic_received_at = now if received_at is None else received_at
+            self._ultrasonic_source_age = self.ultrasonic["age_ms"]
+            self._refresh_ultrasonic(now)
             rain = values["rain_state"] if values["rain_source"] == "master" else None
             self.rain_var.set({0: "无雨", 1: "有雨"}.get(rain, "--"))
             online = values["slave_online"]
@@ -1050,7 +1099,7 @@ class MonitorApp(tk.Tk):
                 self.value_vars[name].set("--" if value is None else f"{value:g}{(' ' + unit) if unit else ''}")
             # Both extended layouts carry current stereo acoustic statistics.
             for name, _ in self.SOUND_LABELS:
-                value = values[name] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE) else None
+                value = values[name] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE, LoRaProtocol.ULTRASONIC_TELEMETRY_SIZE) else None
                 self.sound_vars[name].set("--" if value is None else str(value))
         elif packet["type"] == LoRaProtocol.MSG_ACK:
             self._append_log(f"ACK command=0x{packet['data'][0]:02X} status={packet['data'][1]}")

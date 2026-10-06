@@ -78,9 +78,12 @@ class Controller:
         self.mq2 = self._empty_mq2()
         self._mq2_received_at = None
         self._mq2_source_age = None
+        self.ultrasonic = self._empty_ultrasonic()
+        self._ultrasonic_received_at = self._ultrasonic_source_age = None
         self.slave_link = "从机链路：未知"
         self.last_telemetry_at = None
         self.updated_at = None
+        self.sample_id = 0
         self.duties = {channel: 0 for channel in self.FAN_PINS}
         self.fan_status = {channel: "未发送" for channel in self.FAN_PINS}
         self.fan_pending = {}
@@ -216,6 +219,8 @@ class Controller:
         self.mq2 = self._empty_mq2()
         self._mq2_received_at = None
         self._mq2_source_age = None
+        self.ultrasonic = self._empty_ultrasonic()
+        self._ultrasonic_received_at = self._ultrasonic_source_age = None
         self.slave_link = "从机链路：未知"
         self.last_telemetry_at = None
         self.updated_at = None
@@ -235,6 +240,22 @@ class Controller:
             self._changed()
         elif age != self.mq2["age_ms"]:
             self.mq2["age_ms"] = age
+            self._changed()
+
+    @staticmethod
+    def _empty_ultrasonic():
+        return dict(valid=False, distance_mm=None, raw_mm=None, pulse_us=None, age_ms=None)
+
+    def _refresh_ultrasonic(self, now: float):
+        if not self.ultrasonic["valid"]:
+            return
+        age = self._ultrasonic_source_age + max(0, int((now - self._ultrasonic_received_at) * 1000))
+        if age >= LoRaProtocol.ULTRASONIC_MAX_AGE_MS:
+            self.ultrasonic = self._empty_ultrasonic()
+            self._ultrasonic_received_at = self._ultrasonic_source_age = None
+            self._changed()
+        elif age != self.ultrasonic["age_ms"]:
+            self.ultrasonic["age_ms"] = age
             self._changed()
 
     def read_once(self):
@@ -378,6 +399,7 @@ class Controller:
                 self._changed()
         now = self.clock()
         self._refresh_mq2(now)
+        self._refresh_ultrasonic(now)
         self._poll_telemetry(now)
         self._service_window(now)
 
@@ -403,6 +425,10 @@ class Controller:
             self._mq2_received_at = now if received_at is None else received_at
             self._mq2_source_age = self.mq2["age_ms"]
             self._refresh_mq2(now)
+            self.ultrasonic = dict(values["ultrasonic"])
+            self._ultrasonic_received_at = now if received_at is None else received_at
+            self._ultrasonic_source_age = self.ultrasonic["age_ms"]
+            self._refresh_ultrasonic(now)
             self.rain = {"state": values["rain_state"] if values["rain_source"] == "master" else None,
                          "source": values["rain_source"]}
             online = values["slave_online"]
@@ -411,11 +437,12 @@ class Controller:
             self.database.insert(packet["flow_id"], values, frame)
             self.last_telemetry_at = now
             self.updated_at = self.wall_clock().strftime("%H:%M:%S")
+            self.sample_id += 1
             for key, name, unit in self.FIELD_LABELS:
                 value = values[name]
                 self.values[key] = "--" if value is None else f"{value:g} {unit}"
             for key in self.SOUND_KEYS:
-                value = values[key] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE) else None
+                value = values[key] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE, LoRaProtocol.ULTRASONIC_TELEMETRY_SIZE) else None
                 self.sounds[key] = "--" if value is None else str(value)
             self._changed()
         elif packet["type"] == LoRaProtocol.MSG_ACK:
@@ -467,7 +494,9 @@ class Controller:
             "telemetry": {"values": dict(self.values), "sounds": dict(self.sounds),
                           "rain": dict(self.rain),
                           "mq2": dict(self.mq2),
-                          "slave_link": self.slave_link, "updated_at": self.updated_at},
+                          "ultrasonic": dict(self.ultrasonic),
+                          "slave_link": self.slave_link, "updated_at": self.updated_at,
+                          "sample_id": self.sample_id},
             "fans": [{"channel": ch, "pin": pin, "duty": self.duties[ch],
                       "status": self.fan_status[ch]} for ch, pin in self.FAN_PINS.items()],
             "window": {"busy": busy, "status": self.window_status},

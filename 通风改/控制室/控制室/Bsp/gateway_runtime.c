@@ -145,11 +145,13 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
                 return ((message->payload[0] == 0x0BU) ||
                         (message->payload[0] == 0x0FU)) ? 1U : 0U;
             }
-            if (message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_BYTES)
+            if ((message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_BYTES) ||
+                (message->payload_length == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_BYTES))
             {
                 uint16_t value[4];
                 uint8_t i;
-                if ((message->payload[0] != 0x1BU) && (message->payload[0] != 0x1FU))
+                uint8_t flags = (message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_BYTES) ? 0x1BU : 0x3BU;
+                if ((message->payload[0] != flags) && (message->payload[0] != (uint8_t)(flags | 4U)))
                 { return 0U; }
                 for (i = 0U; i < 4U; i++)
                 {
@@ -157,10 +159,22 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
                     value[i] = (uint16_t)((uint16_t)message->payload[offset] |
                         ((uint16_t)message->payload[offset + 1U] << 8U));
                 }
+                if (!((value[0] == 0xFFFFU) && (value[1] == 0xFFFFU) &&
+                      (value[2] == 0xFFFFU) && (value[3] == 0xFFFFU)) &&
+                    !((value[0] <= 4095U) && (value[1] <= 3600U) &&
+                      (value[2] <= 7200U) && (value[3] < 2000U))) { return 0U; }
+                if (message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_BYTES) { return 1U; }
+                for (i = 0U; i < 4U; i++)
+                {
+                    uint8_t offset = (uint8_t)(34U + 2U * i);
+                    value[i] = (uint16_t)((uint16_t)message->payload[offset] |
+                        ((uint16_t)message->payload[offset + 1U] << 8U));
+                }
                 if ((value[0] == 0xFFFFU) && (value[1] == 0xFFFFU) &&
                     (value[2] == 0xFFFFU) && (value[3] == 0xFFFFU)) { return 1U; }
-                return ((value[0] <= 4095U) && (value[1] <= 3600U) &&
-                        (value[2] <= 7200U) && (value[3] < 2000U)) ? 1U : 0U;
+                return ((value[0] >= 100U) && (value[0] <= 500U) &&
+                        (value[1] >= 100U) && (value[1] <= 500U) &&
+                        (value[2] > 0U) && (value[2] < 10000U) && (value[3] < 2000U)) ? 1U : 0U;
             }
             if (message->payload_length == LORA_PROTOCOL_LEGACY_TELEMETRY_BYTES)
             {

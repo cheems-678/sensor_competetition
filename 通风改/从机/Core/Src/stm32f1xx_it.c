@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "sph0645.h"
+#include "hcsr04_timer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -245,6 +246,11 @@ void USART2_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+void TIM3_IRQHandler(void)
+{
+    Hcsr04Timer_IRQHandler();
+}
+
 void USART1_IRQHandler(void)
 {
     HAL_UART_IRQHandler(&huart1);

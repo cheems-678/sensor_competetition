@@ -48,7 +48,9 @@ Mcu.Pin6=PB6
 Mcu.Pin7=PB7
 Mcu.Pin8=PA9
 Mcu.Pin9=PA10
-Mcu.PinsNb=22
+Mcu.Pin22=PB0
+Mcu.Pin23=PB1
+Mcu.PinsNb=24
 Mcu.ThirdPartyNb=0
 Mcu.UserConstants=
 Mcu.UserName=STM32F103C8Tx
@@ -234,3 +236,15 @@ SH.S_TIM2_CH3.ConfNb=1
 SH.S_TIM2_CH4.0=TIM2_CH4,PWM Generation4 CH4
 SH.S_TIM2_CH4.ConfNb=1
 TIM4.Pulse-PWM\ Generation4\ CH4=0
+
+# HC-SR04 TIM3 capture is initialized by Bsp/hcsr04_timer.c, not CubeMX.
+PB0.GPIOParameters=GPIO_PuPd,GPIO_Label
+PB0.GPIO_Label=HCSR04_ECHO
+PB0.GPIO_PuPd=GPIO_PULLDOWN
+PB0.Locked=true
+PB0.Signal=GPIO_Input
+PB1.GPIOParameters=GPIO_Label,GPIO_Speed
+PB1.GPIO_Label=HCSR04_TRIG
+PB1.GPIO_Speed=GPIO_SPEED_FREQ_LOW
+PB1.Locked=true
+PB1.Signal=GPIO_Output

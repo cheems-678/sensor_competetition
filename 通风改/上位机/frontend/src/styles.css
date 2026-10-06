@@ -401,7 +401,7 @@ html { scroll-padding-top: 16rem; }
 .summary-card { padding: 12px 15px; }
 .summary-card > span { color: #7c9bb7; font-size: .7857rem; }
 .summary-card strong { display: block; color: #d0edff; font: 500 1.3571rem/1.6 "Consolas", "Microsoft YaHei UI", sans-serif; margin: 3px 0; overflow-wrap: anywhere; }
-.summary-card small { display: block; color: #63839e; font-size: .7143rem; line-height: 1.7; }
+.summary-card strong { margin-bottom: 0; }
 .environment-panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 15px; margin-top: 13px; }
 .environment-panels .metrics-grid { padding-top: 25px; padding-bottom: 28px; }
 .environment-panels .metric-value { font-size: 2.5rem; }
@@ -489,3 +489,74 @@ html { scroll-padding-top: 16rem; }
 @media (max-width: 600px) {
   .smoke-metrics { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Keep everyday readings visible; explanations are available on demand. */
+.page-heading { margin-bottom: 14px; align-items: center; }
+.page-heading h2 { margin-bottom: 0; }
+.overview-status { margin-bottom: 14px; }
+.granary-panel { margin-bottom: 0; }
+.granary-caption { top: 50%; }
+.thermal-readings { padding-top: 0; }
+.help-details { border-top: 1px solid #20384f; padding: 0 17px; color: #92abc3; }
+.help-details > summary { width: fit-content; min-height: 2.6rem; padding: 9px 2px; cursor: pointer; font-size: .8571rem; color: #79afc6; }
+.help-details > summary:hover { color: #b5eafa; }
+.help-details > summary:focus-visible { outline: 2px solid #57cde3; outline-offset: 2px; border-radius: 3px; }
+.help-content { padding: 0 2px 14px; font-size: .8571rem; line-height: 1.8; overflow-wrap: anywhere; }
+.help-content p { margin: 0; }
+.help-content p + p, .help-content .smoke-reference { margin-top: 9px; }
+.help-content strong { color: #c1d5e8; font-weight: 500; }
+.smoke-reading-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #94b2cc; font-size: .9286rem; }
+.smoke-details .smoke-number { margin-top: 8px; }
+
+.environment-trend { margin-top: 16px; overflow: hidden; }
+.trend-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 13px 17px; border-bottom: 1px solid #233c53; background: linear-gradient(90deg, #10283b, #101a30); }
+.trend-heading svg { color: #59d7e5; }
+.trend-selector { display: flex; gap: 3px; padding: 3px; border: 1px solid #28465b; border-radius: 6px; background: #081523; }
+.trend-selector button { border: 0; padding: 6px 14px; border-radius: 4px; background: transparent; color: #879fb9; cursor: pointer; font-size: .9286rem; }
+.trend-selector button[aria-pressed="true"] { color: #9bf4f9; background: #194252; box-shadow: inset 0 0 0 1px #32697c; }
+.trend-selector button:focus-visible { outline: 2px solid #5bcce4; outline-offset: 2px; }
+.trend-meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 16px 20px 0; color: #93abc1; font-size: .8571rem; }
+.trend-legend { display: flex; gap: 18px; }
+.trend-legend span { display: flex; align-items: center; gap: 8px; }
+.trend-legend i { width: 17px; height: 3px; border-radius: 2px; }
+.trend-legend .master { background: #55dce6; }
+.trend-legend .slave { background: #c0a1ff; }
+.trend-stage { position: relative; margin: 0 12px; min-height: 12rem; }
+.trend-chart { display: block; width: 100%; height: auto; overflow: visible; }
+.trend-chart:focus-visible { outline: 1px solid #58d2e4; border-radius: 4px; }
+.trend-grid line { stroke: #253b50; stroke-width: 1; stroke-dasharray: 3 5; }
+.trend-grid text, .trend-time { fill: #7994b0; font-size: .8571rem; font-family: Consolas, "Microsoft YaHei UI", monospace; }
+.trend-series path { stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.trend-series.master path { stroke: #55dce6; }
+.trend-series.slave path { stroke: #c0a1ff; }
+.trend-series.master circle, .trend-cursor .master { fill: #55dce6; }
+.trend-series.slave circle, .trend-cursor .slave { fill: #c0a1ff; }
+.trend-cursor line { stroke: #7bacc1; stroke-dasharray: 4 5; opacity: .45; }
+.trend-cursor circle { stroke: #0a1628; stroke-width: 2; }
+.trend-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #6f90aa; font-size: .9286rem; pointer-events: none; }
+.trend-reading { display: flex; align-items: baseline; justify-content: flex-end; flex-wrap: wrap; gap: 12px 24px; padding: 5px 20px 17px; font-size: .8571rem; color: #94aec6; }
+.trend-reading time { margin-right: auto; font-family: Consolas, monospace; }
+.trend-reading span { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.trend-reading strong { font: 500 1.2857rem Consolas, monospace; overflow-wrap: anywhere; }
+.trend-reading .master strong { color: #55dce6; }
+.trend-reading .slave strong { color: #c0a1ff; }
+@container (max-width: 40rem) {
+  .trend-chart { min-height: 13rem; }
+  .trend-reading { gap: 10px 15px; }
+}
+
+.ultrasonic-scene { position: relative; width: min(100%, 800px); margin: 18px auto 8px; color: #66dce6; }
+.ultrasonic-granary { display: block; width: 100%; height: auto; }
+.ultrasonic-dimension { color: inherit; }
+.ultrasonic-diagram-label { fill: #acc6db; font-size: 16px; }
+.ultrasonic-grain-label { fill: #e6d2a7; font-size: 19px; letter-spacing: 5px; }
+.ultrasonic-annotation { position: absolute; left: 62%; right: 3%; top: 37%; }
+.ultrasonic-annotation-label { display: block; font-size: 1rem; line-height: 1.5; color: #a8c7d9; }
+.ultrasonic-distance { display: flex; align-items: baseline; gap: .5rem; padding-top: .5rem; color: #ddf8fc; }
+.ultrasonic-distance strong { font-size: clamp(2rem, 4vw, 3.8rem); line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ultrasonic-distance > span { font-size: 1.25rem; color: var(--text-muted, #8ca2b8); }
+.ultrasonic-diagram-caption { display: block; text-align: center; margin: -12px 0 18px; color: #718ba4; font-size: .8571rem; }
+.measurement-unavailable { color: #718698; }
+.measurement-unavailable .ultrasonic-distance { color: #8298ab; }
+.ultrasonic-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 620px) { .ultrasonic-metrics { grid-template-columns: 1fr; } }

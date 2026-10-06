@@ -2,6 +2,7 @@
 #define MASTER_RUNTIME_H
 
 #include <stdint.h>
+#include "lora_protocol.h"
 
 typedef struct
 {
@@ -29,6 +30,8 @@ typedef struct
     uint32_t window_response_match_count;
     uint32_t window_response_unmatched_count;
     uint32_t window_timeout_count;
+    uint32_t status_attempt_count;
+    uint32_t web_received, web_deferred, web_wait_timeout, web_applied, web_failed;
 } MasterRuntimeDiagnostics;
 
 extern MasterRuntimeDiagnostics MasterRuntimeDiag;
@@ -41,5 +44,7 @@ uint8_t MasterRuntime_CanTransmit(void);
 uint8_t MasterRuntime_IsSlaveQueryCurrent(uint16_t flow_id);
 /* Type+flow prevent stale window/telemetry frames from crossing transactions. */
 uint8_t MasterRuntime_IsSlaveRequestCurrent(uint8_t request_type, uint16_t flow_id);
+/* Called only at an idle physical transmit opportunity; never queues a snapshot. */
+uint8_t MasterRuntime_PrepareStatus(LoRaMessage *message, uint32_t now_ms);
 
 #endif /* MASTER_RUNTIME_H */

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Minus, Pause, Play, Plus, RotateCcw } from 'lucide-react'
 import { Button } from './button'
+import { HelpDetails } from './help-details'
 import { adjustGranaryView, defaultGranaryView, drawGranary, type GranaryView as View } from '../lib/granary-model'
 import { simulatedTemperature, temperatureColor, temperatureGradient, temperatureStops } from '../lib/simulated-temperature'
-
 export function GranaryView({ active: pageActive = true }: { active?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const view = useRef(defaultGranaryView())
@@ -13,7 +13,6 @@ export function GranaryView({ active: pageActive = true }: { active?: boolean })
   const elapsed = useRef(0)
   const [temperatures, setTemperatures] = useState(() => ({ lower: simulatedTemperature(-1.1, 0), upper: simulatedTemperature(1.02, 0) }))
   const change = (next: View) => { view.current = next; render.current() }
-
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -104,7 +103,6 @@ export function GranaryView({ active: pageActive = true }: { active?: boolean })
       cancelAnimationFrame(frame); render.current = () => {}
     }
   }, [paused, pageActive])
-
   return <section className="panel granary-panel" aria-labelledby="granary-title">
     <div className="granary-heading">
       <div className="heading-name"><Box size={18} strokeWidth={1.6} /><h2 id="granary-title">粮仓三维视图</h2><span className="granary-badge">模拟温度</span></div>
@@ -119,19 +117,16 @@ export function GranaryView({ active: pageActive = true }: { active?: boolean })
       <canvas ref={canvasRef} className="granary-canvas" tabIndex={0} role="img" aria-label="粮仓三维示意模型：圆筒仓体、锥形仓顶与固定内部剖面" aria-describedby="granary-help" />
       {unavailable && <p className="granary-fallback" role="status">当前环境无法显示三维模型，其他操作仍可使用。</p>}
       <div className="granary-caption">
-        <span className="granary-eyebrow">GRANARY / THERMAL SIMULATION</span><strong>模拟温度场</strong>
-        <span className="thermal-state"><i className={paused ? 'paused' : ''} />{paused ? '模拟已暂停' : '缓慢动态变化 · 下冷上暖'}</span>
         <div className="thermal-readings">
-          {[['上层', temperatures.upper], ['下层', temperatures.lower]].map(([label, temperature]) => <div key={label}><span>模拟{label}</span><b style={{ color: `rgb(${temperatureColor(Number(temperature)).join(',')})` }}>{Number(temperature).toFixed(1)}<small> °C</small></b></div>)}
+          {[['上层', temperatures.upper], ['下层', temperatures.lower]].map(([label, temperature]) => <div key={label}><span>{label}</span><b style={{ color: `rgb(${temperatureColor(Number(temperature)).join(',')})` }}>{Number(temperature).toFixed(1)}<small> °C</small></b></div>)}
         </div>
         <div className="temperature-spectrum" aria-label="模拟温度色谱，16℃蓝色到36℃橙色">
           <div className="spectrum-heading"><span>低温</span><span>温度色谱 / °C</span><span>高温</span></div>
           <div className="spectrum-bar" style={{ background: temperatureGradient }} />
           <div className="spectrum-stops">{temperatureStops.map(stop => <span key={stop.temperature}><b>{stop.temperature}°</b><small>{stop.label}</small></span>)}</div>
         </div>
-        <p>模拟温度仅用于视觉展示<br />非实测粮位或传感器分布</p>
       </div>
-      <div className="granary-help" id="granary-help">拖拽旋转 · 滚轮缩放<span>键盘方向键旋转，+/− 缩放，Home 复位</span></div>
     </div>
+    <HelpDetails id="granary-help"><p>拖拽旋转，滚轮缩放；键盘方向键旋转，+/− 缩放，Home 复位。</p><p>温度为视觉模拟，不是实测粮温；模型不表示实际粮位或传感器分布。</p></HelpDetails>
   </section>
 }

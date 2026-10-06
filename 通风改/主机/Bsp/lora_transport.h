@@ -2,6 +2,7 @@
 #define LORA_TRANSPORT_H
 
 #include <stdint.h>
+uint8_t LoraTransport_HasRx(void);
 
 /**
  ******************************************************************************

@@ -5,8 +5,10 @@
 #include "i2c.h"
 #include "slave_bme280.h"
 #include "slave_protocol_runtime.h"
+#include "slave_master_status.h"
 #include "slave_acoustic.h"
 #include "slave_mq2.h"
+#include "slave_hcsr04.h"
 #include "slave_servo_test.h"
 #include "sg90_test_pwm.h"
 
@@ -22,6 +24,13 @@ static uint16_t gpio_levels, stuck_pins;
 static uint8_t sent[141];
 static uint16_t sent_len;
 volatile SlaveMq2Diagnostics SlaveMq2Diag;
+volatile SlaveHcsr04Diagnostics SlaveHcsr04Diag;
+static SlaveHcsr04Sample ultrasonic_sample;
+uint8_t SlaveHcsr04_GetSample(uint32_t now, SlaveHcsr04Sample *sample)
+{
+    if (!SlaveHcsr04Diag.valid || (uint32_t)(now - ultrasonic_sample.tick) >= 2000U) { return 0U; }
+    *sample = ultrasonic_sample; return 1U;
+}
 static SlaveMq2Sample mq2_sample;
 uint8_t SlaveMq2_GetSample(uint32_t now, SlaveMq2Sample *sample)
 {
@@ -171,6 +180,7 @@ static void reset(uint32_t start)
     audio_valid = 0U;
     audio_tick = audio_epoch = audio_left = audio_right = 0U;
     memset((void *)&SlaveMq2Diag, 0, sizeof(SlaveMq2Diag));
+    memset((void *)&SlaveHcsr04Diag, 0, sizeof(SlaveHcsr04Diag));
     gpio_levels = GPIO_PIN_6 | GPIO_PIN_7; stuck_pins = 0U;
     bank[0xD0] = 0x60U;
     for (i = 0U; i < 12U; i++) { put16(0x88U + i*2U, calibration[i]); }
@@ -243,11 +253,11 @@ static void assert_window_ack(uint16_t flow, uint8_t status)
 static void assert_reply(uint16_t flow, uint8_t valid)
 {
     unsigned index;
-    assert(sent_len == 47U && sent[2] == 4U && sent[3] == 2U);
+    assert(sent_len == 55U && sent[2] == 4U && sent[3] == 2U);
     assert(sent[4] == 3U && sent[5] == 1U && sent[6] == 2U && sent[7] == 1U);
     assert((uint16_t)(sent[8] | ((uint16_t)sent[9] << 8U)) == flow);
-    assert(sent[10] == 34U && sent[11] == 0x18U);
-    assert(crc16(&sent[2], 43U) == (uint16_t)(sent[45] | ((uint16_t)sent[46] << 8U)));
+    assert(sent[10] == 42U && sent[11] == 0x38U);
+    assert(crc16(&sent[2], 51U) == (uint16_t)(sent[53] | ((uint16_t)sent[54] << 8U)));
     for (index = 20U; index < 29U; index++) { assert(sent[index] == 0xFFU); }
     if (valid)
     {
@@ -766,14 +776,14 @@ static void test_mq2_source_age_duplicates_fault_and_wrap(void)
     SlaveMq2Diag.valid = 1U;
     mq2_sample.raw = 0U; mq2_sample.pa7_mv = 0U; mq2_sample.ao_mv = 0U; mq2_sample.tick = tick;
     tick = 21U; request(800U, 0U, 0U, 0U); process(tick); process(71U);
-    assert(sent_len == 47U && mq2_u16(37U) == 0U && mq2_u16(43U) == 51U);
+    assert(sent_len == 55U && mq2_u16(37U) == 0U && mq2_u16(43U) == 51U);
     tick = 100U; mq2_sample.raw = 4095U; mq2_sample.tick = tick;
     request(800U, 0U, 0U, 0U); process(tick); process(150U);
     assert(mq2_u16(37U) == 0U && mq2_u16(43U) == 130U);
     tick = 1970U; mq2_sample.tick = tick;
     request(800U, 0U, 0U, 0U); process(tick); process(2020U);
     assert(mq2_u16(37U) == 0xFFFFU && mq2_u16(43U) == 0xFFFFU);
-    assert(crc16(&sent[2], 43U) == mq2_u16(45U));
+    assert(crc16(&sent[2], 51U) == mq2_u16(53U));
 
     reset(0U); process(0U); process(20U); SlaveMq2Diag.valid = 1U; mq2_sample.tick = tick;
     tick = 21U; request(801U, 0U, 0U, 0U); process(tick);
@@ -783,7 +793,7 @@ static void test_mq2_source_age_duplicates_fault_and_wrap(void)
     SlaveMq2Diag.error_count++; mq2_sample.tick = 75U;
     tx_fail = 0U; process(81U);
     assert(mq2_u16(37U) == 0xFFFFU && mq2_u16(39U) == 0xFFFFU);
-    assert(crc16(&sent[2], 43U) == mq2_u16(45U));
+    assert(crc16(&sent[2], 51U) == mq2_u16(53U));
 
     reset(0xFFFFFFC0U); process(tick); process(tick + 20U); tick = 0xFFFFFFF0U;
     SlaveMq2Diag.valid = 1U; mq2_sample.tick = tick;
@@ -793,8 +803,64 @@ static void test_mq2_source_age_duplicates_fault_and_wrap(void)
     assert(mq2_u16(43U) == 50U);
 }
 
+static void test_status_rx_isolated_from_pending_window(void)
+{
+    uint8_t frame[39], payload[26];
+    uint16_t crc;
+    unsigned i, before;
+    SlaveMasterStatus master;
+    reset(0U); process(0U); process(20U); window_request(500U, 1U); process(tick);
+    before = sent_count;
+    memset(payload, 255U, sizeof(payload)); payload[0] = 1U; payload[1] = 0U; payload[2] = 128U;
+    memset(frame, 0, sizeof(frame)); frame[0] = 170U; frame[1] = 85U; frame[2] = 4U;
+    frame[3] = 3U; frame[4] = 2U; frame[5] = 1U; frame[6] = 3U; frame[7] = 1U;
+    frame[8] = 100U; frame[10] = 26U; memcpy(frame+11U, payload, 26U);
+    crc = crc16(frame+2U, 35U); frame[37] = (uint8_t)crc; frame[38] = (uint8_t)(crc >> 8U);
+    for (i = 0U; i < 39U; i++) { SlaveRuntime_PushRxByteFromIsr(frame[i]); }
+    process(tick); SlaveMasterStatus_Get(tick, &master);
+    assert(master.online && !master.bme_valid && sent_count == before);
+    assert(SlaveRuntimeDiag.request_count == 1U && pwm_pulse == 1700U);
+    frame[8]++; frame[5] = 2U; crc = crc16(frame+2U, 35U);
+    frame[37] = (uint8_t)crc; frame[38] = (uint8_t)(crc >> 8U);
+    for (i = 0U; i < 39U; i++) { SlaveRuntime_PushRxByteFromIsr(frame[i]); }
+    process(tick); assert(SlaveMasterStatusDiag.accepted_count == 1U);
+    frame[5] = 1U; frame[37] ^= 1U;
+    for (i = 0U; i < 39U; i++) { SlaveRuntime_PushRxByteFromIsr(frame[i]); }
+    process(tick); assert(SlaveMasterStatusDiag.accepted_count == 1U);
+    process(tick + 50U); assert(sent_count == before + 1U); assert_window_ack(500U, 0U);
+}
+
+static void test_ultrasonic_duplicates_fault_retry_and_wrap(void)
+{
+    reset(0U); process(0U); process(20U); SlaveHcsr04Diag.valid = 1U;
+    ultrasonic_sample.tick = 20U; ultrasonic_sample.distance_mm = 250U;
+    ultrasonic_sample.raw_mm = 252U; ultrasonic_sample.pulse_us = 1469U;
+    tick = 21U; request(850U, 0U, 0U, 0U); process(tick); process(71U);
+    assert(mq2_u16(45U) == 250U && mq2_u16(47U) == 252U && mq2_u16(49U) == 1469U && mq2_u16(51U) == 51U);
+    ultrasonic_sample.tick = 100U; ultrasonic_sample.distance_mm = 300U;
+    tick = 100U; request(850U, 0U, 0U, 0U); process(tick); process(150U);
+    assert(mq2_u16(45U) == 250U && mq2_u16(51U) == 130U);
+    tick = 1970U; ultrasonic_sample.tick = tick;
+    request(850U, 0U, 0U, 0U); process(tick); process(2020U);
+    assert(mq2_u16(45U) == 0xFFFFU && mq2_u16(51U) == 0xFFFFU);
+    assert(crc16(&sent[2], 51U) == mq2_u16(53U));
+    reset(0U); process(0U); process(20U); SlaveHcsr04Diag.valid = 1U;
+    ultrasonic_sample.tick = tick; tick = 21U; request(851U, 0U, 0U, 0U); process(tick);
+    tx_fail = 1U; process(71U); assert(sent_count == 0U);
+    SlaveHcsr04Diag.error_count++; ultrasonic_sample.tick = 75U;
+    tx_fail = 0U; process(81U);
+    assert(mq2_u16(45U) == 0xFFFFU && mq2_u16(49U) == 0xFFFFU);
+    assert(crc16(&sent[2], 51U) == mq2_u16(53U));
+    reset(0xFFFFFFC0U); process(tick); process(tick + 20U); tick = 0xFFFFFFF0U;
+    SlaveHcsr04Diag.valid = 1U; ultrasonic_sample.tick = tick;
+    request(852U, 0U, 0U, 0U); process(tick); process(34U);
+    assert(mq2_u16(45U) == 300U && mq2_u16(51U) == 50U);
+}
+
 int main(void)
 {
+    test_ultrasonic_duplicates_fault_retry_and_wrap();
+    test_status_rx_isolated_from_pending_window();
     test_mq2_source_age_duplicates_fault_and_wrap();
     test_four_window_ids_and_cross_id_duplicates();
     test_sensor_vector_cache_and_address();
@@ -818,6 +884,6 @@ int main(void)
     test_window_driver_failure_and_bounded_uart_retry();
     test_window_ack_tick_wrap_and_late_audio_expiry();
     test_window_timed_stop_and_stop_failure_preserve_telemetry();
-    puts("23 slave BME/I2C/runtime/MQ2/audio/window groups passed");
+    puts("25 slave BME/I2C/runtime/MQ2/ultrasonic/audio/window/status groups passed");
     return 0;
 }

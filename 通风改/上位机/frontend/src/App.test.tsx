@@ -19,6 +19,70 @@ function fakeAPI(state = initialSnapshot()): DesktopAPI {
 }
 
 describe('existing controls and readable values', () => {
+  it('removes redundant copy and keeps necessary help collapsed across navigation without commands', async () => {
+    const state = initialSnapshot(); state.connected = true; state.port = 'COM32'; state.revision = 1
+    const api = fakeAPI(state)
+    render(<App api={api} />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(document.querySelector('.page-heading p')).not.toBeInTheDocument()
+    expect(document.querySelector('.summary-card small')).not.toBeInTheDocument()
+    expect(document.querySelector('.app-footer')).not.toBeInTheDocument()
+    expect(screen.getAllByText('模拟温度')).toHaveLength(1)
+    expect(screen.queryByText(/缓慢动态变化|模型模拟不改变实测数据|串口采集已连接|来自遥测帧的链路状态/)).not.toBeInTheDocument()
+    const modelHelp = document.querySelector('#granary-help') as HTMLDetailsElement
+    const modelNote = within(modelHelp).getByText(/温度为视觉模拟/)
+    expect(modelHelp.open).toBe(false); expect(modelNote).not.toBeVisible()
+    fireEvent.click(within(modelHelp).getByText('说明'))
+    expect(modelHelp.open).toBe(true); expect(modelNote).toBeVisible()
+    navigate('窗户控制')
+    const windowHelp = document.querySelector('[data-page="windows"] details') as HTMLDetailsElement
+    const ackNote = within(windowHelp).getByText(/ACK 只确认启动 PWM/)
+    expect(ackNote).not.toBeVisible()
+    fireEvent.click(within(windowHelp).getByText('说明'))
+    expect(ackNote).toBeVisible()
+    expect(ackNote).toHaveTextContent('不表示动作完成、自动停止成功或机械到位')
+    navigate('雨滴监测')
+    const rainPage = document.querySelector('[data-page="rain"]') as HTMLElement
+    expect(within(rainPage).getByText(/不测量雨量/)).not.toBeVisible()
+    expect(rainPage.querySelector('.scene-caption')).not.toBeInTheDocument()
+    navigate('烟雾监测')
+    const smokePage = document.querySelector('[data-page="smoke"]') as HTMLElement
+    expect(within(smokePage).getByText('相对指数')).toBeVisible()
+    expect(within(smokePage).getByText('未标定')).toBeVisible()
+    expect(smokePage.querySelector('.smoke-reference')).not.toBeVisible()
+    navigate('粮仓总览'); expect(modelHelp.open).toBe(true); expect(modelNote).toBeVisible()
+    navigate('窗户控制'); expect(windowHelp.open).toBe(true); expect(ackNote).toBeVisible()
+    fireEvent.click(within(windowHelp).getByText('说明')); expect(ackNote).not.toBeVisible()
+    for (const method of [api.connect, api.disconnect, api.read_once, api.set_fan, api.set_window]) expect(method).not.toHaveBeenCalled()
+    cleanup()
+    render(<App api={api} />)
+    expect((document.querySelector('#granary-help') as HTMLDetailsElement).open).toBe(false)
+  })
+  it('records environment measurements across pages and switches trends without device commands', async () => {
+    vi.useFakeTimers()
+    const state = initialSnapshot(); state.connected = true; state.port = 'COM32'; state.revision = 1
+    state.telemetry.updated_at = '12:00:00'; state.telemetry.sample_id = 1
+    state.telemetry.values.master_temp = '24 °C'; state.telemetry.values.slave_temp = '23 °C'
+    const api = fakeAPI(state)
+    render(<App api={api} />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    navigate('环境监测')
+    expect(document.querySelector('[data-page="environment"] .rain-panel')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.trend-series path')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: '温度' })).toHaveAttribute('aria-pressed', 'true')
+    navigate('风机控制')
+    state.telemetry.values.master_temp = '26 °C'; state.telemetry.sample_id++; state.revision++
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    navigate('环境监测')
+    expect(document.querySelector('.trend-series.master path')?.getAttribute('d')?.match(/[ML]/g)).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: '湿度' }))
+    navigate('粮仓总览'); navigate('环境监测')
+    expect(screen.getByRole('button', { name: '湿度' })).toHaveAttribute('aria-pressed', 'true')
+    state.connected = false; state.revision++
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    expect(document.querySelector('.trend-connection')).toHaveTextContent('已断开')
+    for (const method of [api.connect, api.disconnect, api.read_once, api.set_fan, api.set_window]) expect(method).not.toHaveBeenCalled()
+  })
   it('shows MQ-2 zero and voltage readings, then clears invalid or disconnected data without commands', async () => {
     vi.useFakeTimers()
     const state = initialSnapshot(); state.connected = true; state.revision = 1
@@ -45,14 +109,14 @@ describe('existing controls and readable values', () => {
     expect(within(page).getAllByText('--')).toHaveLength(5)
     for (const method of [api.connect, api.disconnect, api.read_once, api.set_fan, api.set_window]) expect(method).not.toHaveBeenCalled()
   })
-  it('keeps overview, animation and environment rain synchronized without submitting commands', async () => {
+  it('keeps overview and animation rain synchronized while removing the environment rain card', async () => {
     vi.useFakeTimers()
     const state = initialSnapshot(); state.connected = true; state.revision = 1
     const api = fakeAPI(state)
     render(<App api={api} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    expect(screen.getAllByRole('button', { name: /^切换到/ })).toHaveLength(8)
-    expect(document.querySelector('.page-index')).toHaveTextContent('01 / 08')
+    expect(screen.getAllByRole('button', { name: /^切换到/ })).toHaveLength(9)
+    expect(document.querySelector('.page-index')).toHaveTextContent('01 / 09')
     for (const [value, text] of [[0, '无雨'], [1, '有雨'], [null, '状态未知']] as const) {
       state.telemetry.rain = { state: value, source: 'master' }
       state.telemetry.slave_link = '从机链路：离线'; state.revision++
@@ -62,7 +126,7 @@ describe('existing controls and readable values', () => {
       navigate('雨滴监测')
       expect(screen.getByRole('status', { name: '雨滴监测状态' })).toHaveTextContent(text)
       navigate('环境监测')
-      expect(screen.getByRole('status', { name: '主机雨滴状态' })).toHaveTextContent(value === null ? '--' : text)
+      expect(screen.queryByRole('status', { name: '主机雨滴状态' })).not.toBeInTheDocument()
     }
     state.telemetry.rain = { state: 1, source: 'master' }; state.revision++
     await act(async () => { await vi.advanceTimersByTimeAsync(100) })
@@ -172,31 +236,31 @@ describe('existing controls and readable values', () => {
     for (const method of [api.connect, api.disconnect, api.read_once, api.set_fan, api.set_window]) expect(method).not.toHaveBeenCalled()
   })
 
-  it('shows master rain three states independently of slave link and clears the status', async () => {
+  it('shows master rain three states on the independent page and clears the status', async () => {
     vi.useFakeTimers()
     const state = initialSnapshot(); state.revision = 1
     state.connected = true
     const api = fakeAPI(state)
     render(<App api={api} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    navigate('环境监测')
-    const panel = screen.getByRole('region', { name: '主机雨滴' })
-    const status = within(panel).getByRole('status', { name: '主机雨滴状态' })
-    expect(status).toHaveTextContent('--')
+    navigate('雨滴监测')
+    const panel = screen.getByRole('region', { name: '主机雨滴视窗' })
+    const status = within(panel).getByRole('status', { name: '雨滴监测状态' })
+    expect(status).toHaveTextContent('状态未知')
     state.telemetry.slave_link = '从机链路：离线'
-    for (const [value, text] of [[0, '无雨'], [1, '有雨'], [null, '--']] as const) {
+    for (const [value, text] of [[0, '无雨'], [1, '有雨'], [null, '状态未知']] as const) {
       state.telemetry.rain = { state: value, source: 'master' }; state.revision++
       await act(async () => { await vi.advanceTimersByTimeAsync(100) })
       expect(status).toHaveTextContent(text)
     }
     state.telemetry.rain = { state: 1, source: 'master' }; state.revision++
     await act(async () => { await vi.advanceTimersByTimeAsync(100) })
-    navigate('风机控制'); navigate('环境监测')
-    expect(screen.getByRole('region', { name: '主机雨滴' })).toBe(panel)
+    navigate('风机控制'); navigate('雨滴监测')
+    expect(screen.getByRole('region', { name: '主机雨滴视窗' })).toBe(panel)
     expect(status).toHaveTextContent('有雨')
     state.telemetry = initialSnapshot().telemetry; state.connected = false; state.revision++
     await act(async () => { await vi.advanceTimersByTimeAsync(100) })
-    expect(status).toHaveTextContent('--')
+    expect(status).toHaveTextContent('状态未知')
     for (const method of [api.connect, api.disconnect, api.read_once, api.set_fan, api.set_window]) expect(method).not.toHaveBeenCalled()
   })
 
@@ -205,8 +269,8 @@ describe('existing controls and readable values', () => {
     state.telemetry.rain = { state: 1, source: null }; state.revision = 1
     render(<App api={fakeAPI(state)} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    navigate('环境监测')
-    expect(screen.getByRole('status', { name: '主机雨滴状态' })).toHaveTextContent('--')
+    navigate('雨滴监测')
+    expect(screen.getByRole('status', { name: '雨滴监测状态' })).toHaveTextContent('状态未知')
     const demo = new BrowserDemo()
     await demo.connect('DEMO · 模拟控制室')
     await demo.read_once()

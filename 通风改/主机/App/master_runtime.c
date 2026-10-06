@@ -35,13 +35,25 @@ typedef struct
     uint8_t slave_data[8];
     uint8_t slave_audio[8];
     uint8_t slave_mq2[8];
+    uint8_t slave_ultrasonic[8];
     uint32_t slave_audio_received_tick;
+    uint8_t web_origin, web_id[8];
     uint8_t active;
 } PendingSlaveRequest;
 
 static PendingSlaveRequest g_pending;
 static MasterEvent g_event;
 static uint16_t g_slave_flow;
+static uint16_t g_status_flow;
+static uint32_t g_status_due;
+static WebRecord g_web_cache[4];
+static uint8_t g_web_next;
+typedef struct {
+    uint32_t received_tick;
+    uint16_t flow;
+    uint8_t payload[WEB_REQUEST_SIZE], active;
+} WaitingWebCommand;
+static WaitingWebCommand g_web_wait;
 
 static void MasterRuntime_SetAddress(LoRaMessage *message,
                                      uint8_t type,
@@ -88,9 +100,10 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
 {
     MasterBme280Sample sample;
 
-    memset(payload, 0, LORA_PROTOCOL_MQ2_TELEMETRY_SIZE);
+    memset(payload, 0, LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE);
     payload[LORA_TELEMETRY_FLAGS_OFFSET] = LORA_TELEMETRY_FLAG_MASTER_BME |
-        LORA_TELEMETRY_FLAG_DUAL_BME | LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2;
+        LORA_TELEMETRY_FLAG_DUAL_BME | LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2 |
+        LORA_TELEMETRY_FLAG_ULTRASONIC;
     MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_BME_TEMP_OFFSET],
                            (uint16_t)LORA_PROTOCOL_TEMPERATURE_INVALID);
     MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_BME_HUM_OFFSET],
@@ -102,6 +115,7 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
     payload[LORA_TELEMETRY_RAIN_OFFSET] = MasterRain_GetState(now_ms);
     memset(&payload[LORA_TELEMETRY_SOUND_1_OFFSET], 0xFF, 8U);
     memset(&payload[LORA_TELEMETRY_MQ2_OFFSET], 0xFF, 8U);
+    memset(&payload[LORA_TELEMETRY_ULTRASONIC_OFFSET], 0xFF, 8U);
     if (g_pending.slave_online != 0U)
     {
         payload[0] |= LORA_TELEMETRY_FLAG_SLAVE_ONLINE;
@@ -115,6 +129,18 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
                 memcpy(&payload[LORA_TELEMETRY_MQ2_OFFSET], g_pending.slave_mq2, 8U);
                 MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_MQ2_AGE_OFFSET],
                                        (uint16_t)(source_age + elapsed));
+            }
+        }
+        {
+            uint16_t source_age = (uint16_t)((uint16_t)g_pending.slave_ultrasonic[6] |
+                                           ((uint16_t)g_pending.slave_ultrasonic[7] << 8U));
+            uint32_t elapsed = now_ms - g_pending.slave_audio_received_tick;
+            if ((source_age < LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS) &&
+                (elapsed < LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS - source_age))
+            {
+                memcpy(&payload[LORA_TELEMETRY_ULTRASONIC_OFFSET], g_pending.slave_ultrasonic, 8U);
+                MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_ULTRASONIC_AGE_OFFSET],
+                                      (uint16_t)(source_age + elapsed));
             }
         }
         if ((uint32_t)(now_ms - g_pending.slave_audio_received_tick) <
@@ -152,7 +178,7 @@ static uint8_t MasterRuntime_QueueTelemetry(uint16_t flow_id, uint32_t now_ms)
 
     MasterRuntime_SetAddress(&outbound, LORA_MSG_TELEMETRY,
                              LORA_ROLE_CONTROL_ROOM, 0U, flow_id);
-    outbound.payload_length = LORA_PROTOCOL_MQ2_TELEMETRY_SIZE;
+    outbound.payload_length = LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE;
     MasterRuntime_FillPlaceholderTelemetry(outbound.payload, now_ms);
     if (MasterRuntime_Queue(&outbound) == 0U)
     {
@@ -163,9 +189,25 @@ static uint8_t MasterRuntime_QueueTelemetry(uint16_t flow_id, uint32_t now_ms)
     return 1U;
 }
 
-static uint8_t MasterRuntime_QueueWindowAck(uint16_t flow_id, uint8_t status)
+static uint8_t QueueWebResult(uint16_t flow, const uint8_t *id, uint8_t state)
+{
+    LoRaMessage m; MasterRuntime_SetAddress(&m,WEB_RESULT,LORA_ROLE_SLAVE,1U,flow);
+    m.payload_length=WEB_RESULT_SIZE;memcpy(m.payload,id,8U);m.payload[8]=state;return MasterRuntime_Queue(&m);
+}
+static void RememberWeb(const uint8_t *p,uint8_t state,uint32_t now)
+{
+    WebRecord *r=Web_Find(g_web_cache,p+3,now);if(r)return;
+    r=g_web_cache+g_web_next;g_web_next=(uint8_t)((g_web_next+1U)%4U);
+    memcpy(r->id,p+3,8U);r->command=p[0];r->channel=p[1];r->value=p[2];r->state=state;r->tick=now;
+}
+static uint8_t MasterRuntime_QueueWindowAck(uint16_t flow_id, uint8_t status, uint8_t web_origin)
 {
     LoRaMessage outbound;
+    if(web_origin)
+    {
+        uint8_t p[11];p[0]=0x11U;p[1]=g_pending.window_servo_id;p[2]=g_pending.window_action;memcpy(p+3,g_pending.web_id,8U);
+        RememberWeb(p,status,HAL_GetTick());return QueueWebResult(flow_id,g_pending.web_id,status);
+    }
 
     MasterRuntime_SetAddress(&outbound, LORA_MSG_ACK,
                              LORA_ROLE_CONTROL_ROOM, 0U, flow_id);
@@ -188,7 +230,7 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
     if (message->type == LORA_MSG_READ_TELEMETRY)
     {
         MasterRuntimeDiag.telemetry_request_count++;
-        if (g_pending.active != 0U)
+        if (g_pending.active != 0U || g_web_wait.active != 0U)
         {
             MasterRuntimeDiag.busy_reject_count++;
             MasterRuntime_QueueError(message->flow_id, MASTER_ERROR_BUSY);
@@ -206,6 +248,7 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         MasterRuntime_WriteU32(&g_pending.slave_data[4], 0xFFFFFFFFUL);
         memset(g_pending.slave_audio, 0xFF, sizeof(g_pending.slave_audio));
         memset(g_pending.slave_mq2, 0xFF, sizeof(g_pending.slave_mq2));
+        memset(g_pending.slave_ultrasonic, 0xFF, sizeof(g_pending.slave_ultrasonic));
         g_pending.sample_generation = MasterBme280Diag.completed_count;
         MasterRuntimeDiag.last_request_flow_id = message->flow_id;
         if (g_pending.force_sample != 0U) { MasterBme280_RequestSample(now_ms); }
@@ -226,7 +269,7 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         {
             MasterRuntimeDiag.window_busy_count++;
             (void)MasterRuntime_QueueWindowAck(message->flow_id,
-                                              LORA_WINDOW_STATUS_BUSY);
+                                              LORA_WINDOW_STATUS_BUSY,0U);
             return;
         }
         memset(&g_pending, 0, sizeof(g_pending));
@@ -246,6 +289,7 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
     {
         uint8_t applied;
 
+        if(g_pending.active){MasterRuntimeDiag.busy_reject_count++;MasterRuntime_QueueError(message->flow_id,MASTER_ERROR_BUSY);return;}
         MasterRuntimeDiag.fan_command_count++;
         applied = FanPwm_SetDuty(message->payload[0], message->payload[1]);
         MasterRuntime_SetAddress(&outbound, LORA_MSG_ACK,
@@ -258,6 +302,60 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
     }
 }
 
+static void HandleWeb(const LoRaMessage *m,uint32_t now,uint32_t received)
+{
+    const uint8_t *p=m->payload;WebRecord *cached;uint8_t state;LoRaMessage cmd;
+    if(!Web_Valid(p,m->payload_length))return;
+    cached=Web_Find(g_web_cache,p+3,now);
+    if(cached){(void)QueueWebResult(m->flow_id,p+3,Web_Same(cached,p)?cached->state:WEB_FAILED);return;}
+    if(g_pending.web_origin&&g_pending.active&&!memcmp(g_pending.web_id,p+3,8U))
+    {if(p[0]!=0x11U||p[1]!=g_pending.window_servo_id||p[2]!=g_pending.window_action)(void)QueueWebResult(m->flow_id,p+3,WEB_FAILED);return;}
+    if(g_web_wait.active)
+    {
+        if(!memcmp(g_web_wait.payload+3,p+3,8U))
+        {if(memcmp(g_web_wait.payload,p,3U))(void)QueueWebResult(m->flow_id,p+3,WEB_FAILED);}
+        else (void)QueueWebResult(m->flow_id,p+3,WEB_BUSY);
+        return;
+    }
+    if((uint32_t)(now-received)>=WEB_QUEUE_MS)state=WEB_UNKNOWN;
+    else if(g_pending.active && g_pending.request_type==LORA_MSG_READ_TELEMETRY)
+    {
+        memcpy(g_web_wait.payload,p,WEB_REQUEST_SIZE);g_web_wait.flow=m->flow_id;
+        g_web_wait.received_tick=received;g_web_wait.active=1U;MasterRuntimeDiag.web_deferred++;return;
+    }
+    else if(g_pending.active)state=WEB_BUSY;
+    else if(p[0]==0x10U)
+    {
+        state=FanPwm_SetDuty(p[1],p[2])?WEB_OK:WEB_FAILED;
+        if(state==WEB_OK)MasterRuntimeDiag.web_applied++;else MasterRuntimeDiag.web_failed++;
+    }
+    else
+    {
+        cmd=*m;cmd.type=0x11U;cmd.payload_length=2U;cmd.payload[0]=p[1];cmd.payload[1]=p[2];
+        MasterRuntime_HandleControl(&cmd,now);g_pending.web_origin=1U;memcpy(g_pending.web_id,p+3,8U);return;
+    }
+    RememberWeb(p,state,now);(void)QueueWebResult(m->flow_id,p+3,state);
+}
+static void ProcessWaitingWeb(uint32_t now)
+{
+    LoRaMessage m;
+    if(!g_web_wait.active)return;
+    if((uint32_t)(now-g_web_wait.received_tick)>=WEB_TELEMETRY_WAIT_MS)
+    {
+        MasterRuntimeDiag.web_wait_timeout++;
+        RememberWeb(g_web_wait.payload,WEB_BUSY,now);
+        (void)QueueWebResult(g_web_wait.flow,g_web_wait.payload+3,WEB_BUSY);
+        g_web_wait.active=0U;return;
+    }
+    if(g_pending.active)return;
+    memset(&m,0,sizeof(m));m.version=LORA_PROTOCOL_VERSION;m.type=WEB_REQUEST;
+    m.source_role=LORA_ROLE_SLAVE;m.destination_role=LORA_ROLE_MASTER;
+    m.source_group=m.destination_group=LORA_PROTOCOL_SINGLE_GROUP;m.flow_id=g_web_wait.flow;
+    m.payload_length=WEB_REQUEST_SIZE;memcpy(m.payload,g_web_wait.payload,WEB_REQUEST_SIZE);
+    g_web_wait.active=0U;
+    /* The original deadline was checked above; this is execution, not new admission. */
+    HandleWeb(&m,now,now);
+}
 static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
                                       uint32_t now_ms, uint32_t received_tick)
 {
@@ -275,6 +373,8 @@ static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
             (slave->payload[1] <= LORA_WINDOW_STATUS_BUSY))
         {
             g_pending.window_status = slave->payload[1];
+            if(g_pending.web_origin)
+            {if(slave->payload[1]==WEB_OK)MasterRuntimeDiag.web_applied++;else if(slave->payload[1]==WEB_FAILED)MasterRuntimeDiag.web_failed++;}
             g_pending.slave_state = 3U;
             MasterRuntimeDiag.window_response_match_count++;
         }
@@ -293,7 +393,10 @@ static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
          ((slave->payload_length == LORA_PROTOCOL_TELEMETRY_SIZE) &&
           (slave->payload[0] == LORA_TELEMETRY_FLAG_ACOUSTIC)) ||
          ((slave->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE) &&
-          (slave->payload[0] == (LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2)))))
+          (slave->payload[0] == (LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2))) ||
+         ((slave->payload_length == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE) &&
+          (slave->payload[0] == (LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2 |
+                                LORA_TELEMETRY_FLAG_ULTRASONIC)))))
     {
         uint32_t elapsed = now_ms - g_pending.slave_start_tick;
         memcpy(g_pending.slave_data, &slave->payload[1], 8U);
@@ -302,8 +405,10 @@ static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
             memcpy(g_pending.slave_audio,
                    &slave->payload[LORA_TELEMETRY_SOUND_1_OFFSET], 8U);
         }
-        if (slave->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE)
+        if (slave->payload_length >= LORA_PROTOCOL_MQ2_TELEMETRY_SIZE)
         { memcpy(g_pending.slave_mq2, &slave->payload[LORA_TELEMETRY_MQ2_OFFSET], 8U); }
+        if (slave->payload_length == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE)
+        { memcpy(g_pending.slave_ultrasonic, &slave->payload[LORA_TELEMETRY_ULTRASONIC_OFFSET], 8U); }
         g_pending.slave_audio_received_tick = received_tick;
         g_pending.slave_online = 1U;
         g_pending.slave_state = 3U;
@@ -320,7 +425,11 @@ void MasterRuntime_Init(void)
 {
     memset(&MasterRuntimeDiag, 0, sizeof(MasterRuntimeDiag));
     memset(&g_pending, 0, sizeof(g_pending));
+    memset(g_web_cache,0,sizeof(g_web_cache));g_web_next=0U;
+    memset(&g_web_wait,0,sizeof(g_web_wait));
     g_slave_flow = 0U;
+    g_status_flow = 0U;
+    g_status_due = HAL_GetTick() + MONITOR_STATUS_PERIOD_MS;
     MasterBme280_Init(HAL_GetTick());
     MasterLight_Init(HAL_GetTick());
     MasterRain_Init(HAL_GetTick());
@@ -334,6 +443,7 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
     MasterBme280_Process(HAL_GetTick());
     now_ms = HAL_GetTick();
     MasterRain_Process(now_ms);
+    ProcessWaitingWeb(now_ms);
 
     if (MasterQueues_ReceiveEvent(&g_event) != 0U)
     {
@@ -349,7 +459,9 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
             else if (route == MASTER_INGRESS_SLAVE)
             {
                 MasterRuntimeDiag.slave_message_count++;
-                MasterRuntime_HandleSlave(&g_event.data.lora_message,
+                if(g_event.data.lora_message.type==WEB_REQUEST)
+                {MasterRuntimeDiag.web_received++;HandleWeb(&g_event.data.lora_message,now_ms,g_event.received_tick);}
+                else MasterRuntime_HandleSlave(&g_event.data.lora_message,
                                            now_ms, g_event.received_tick);
             }
             else
@@ -406,7 +518,7 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
             (g_pending.request_type == LORA_MSG_SET_WINDOW))
         {
             if (MasterRuntime_QueueWindowAck(g_pending.flow_id,
-                                             g_pending.window_status) != 0U)
+                                             g_pending.window_status,g_pending.web_origin) != 0U)
             { g_pending.active = 0U; }
         }
         else if ((g_pending.slave_state == 3U) &&
@@ -418,6 +530,7 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
             { g_pending.active = 0U; }
         }
     }
+    ProcessWaitingWeb(HAL_GetTick());
 }
 
 void MasterRuntime_NotifySlaveRequestSent(uint16_t flow_id, uint32_t now_ms)
@@ -445,4 +558,42 @@ uint8_t MasterRuntime_IsSlaveRequestCurrent(uint8_t request_type, uint16_t flow_
     return ((g_pending.active != 0U) && (g_pending.slave_state == 1U) &&
             (g_pending.request_type == request_type) &&
             (g_pending.slave_flow_id == flow_id)) ? 1U : 0U;
+}
+
+uint8_t MasterRuntime_PrepareStatus(LoRaMessage *message, uint32_t now_ms)
+{
+    MasterBme280Sample sample;
+    uint8_t i;
+    if (message == NULL || g_pending.active != 0U ||
+        MasterQueues_EventWaiting() != 0U || MasterQueues_LoRaWaiting() != 0U ||
+        (int32_t)(now_ms - g_status_due) < 0)
+    { return 0U; }
+    g_status_due = now_ms + MONITOR_STATUS_PERIOD_MS;
+    MasterRuntimeDiag.status_attempt_count++;
+    MasterRuntime_SetAddress(message, LORA_MSG_MASTER_STATUS, LORA_ROLE_SLAVE,
+                             LORA_PROTOCOL_SINGLE_GROUP, ++g_status_flow);
+    message->payload_length = MONITOR_STATUS_BYTES;
+    memset(message->payload, 0xFF, MONITOR_STATUS_BYTES);
+    message->payload[0] = MONITOR_STATUS_LAYOUT;
+    MasterRuntime_WriteU16(message->payload + MONITOR_BME_TEMP, 0x8000U);
+    if (MasterBme280_GetSample(now_ms, &sample) != 0U)
+    {
+        MasterRuntime_WriteU16(message->payload + MONITOR_BME_TEMP,
+                               (uint16_t)sample.temperature_x10);
+        MasterRuntime_WriteU16(message->payload + MONITOR_BME_HUM, sample.humidity_x10);
+        MasterRuntime_WriteU32(message->payload + MONITOR_BME_PRESSURE, sample.pressure_pa);
+        MasterRuntime_WriteU16(message->payload + MONITOR_BME_AGE,
+                               (uint16_t)(now_ms - MasterBme280Diag.sample_tick));
+    }
+    message->payload[MONITOR_RAIN] = MasterRain_GetState(now_ms);
+    message->payload[MONITOR_DARK] = (MasterLightDiag.input_valid != 0U) ?
+                                    (uint8_t)MasterLightDiag.stable_dark : 0xFFU;
+    message->payload[MONITOR_LIGHT] = (MasterLightDiag.output_valid != 0U) ?
+                                     (uint8_t)MasterLightDiag.light_on : 0xFFU;
+    for (i = 0U; i < FAN_PWM_CHANNEL_COUNT; i++)
+    { message->payload[MONITOR_FANS + i] = FanPwm_GetDuty((uint8_t)(i + 1U)); }
+    MasterRuntime_WriteU32(message->payload + MONITOR_UPTIME, now_ms);
+    MasterRuntime_WriteU32(message->payload + MONITOR_BME_SEQUENCE,
+                           MasterBme280Diag.sample_success_count);
+    return 1U;
 }

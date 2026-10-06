@@ -100,6 +100,25 @@ class ControllerTests(unittest.TestCase):
     def stored_rows(self):
         return self.database.connection.execute("SELECT COUNT(*) FROM telemetry_v4").fetchone()[0]
 
+    def test_measurement_identity_only_advances_on_matching_telemetry(self):
+        self.connect()
+        self.assertEqual(self.controller.snapshot()["telemetry"]["sample_id"], 0)
+        self.controller._handle_frame(response(P.MSG_TELEMETRY, 99, telemetry_payload()))
+        self.assertEqual(self.controller.sample_id, 0)
+        for expected in (1, 2):
+            flow = self.sample()
+            self.assertEqual(self.controller.snapshot()["telemetry"]["sample_id"], expected)
+            self.controller._handle_frame(ack(flow))
+            self.assertEqual(self.controller.sample_id, expected)
+        self.controller.read_once()
+        flow = self.controller.telemetry_pending[0]
+        self.clock.advance(5)
+        self.controller._handle_frame(response(P.MSG_TELEMETRY, flow, telemetry_payload()))
+        self.assertEqual(self.controller.sample_id, 2)
+        self.assertIsNone(self.controller.updated_at)
+        self.controller.disconnect()
+        self.assertEqual(self.controller.sample_id, 2)
+
     def test_initial_snapshot_and_disconnected_button_rules(self):
         s = self.controller.snapshot()
         self.assertFalse(s["connected"])

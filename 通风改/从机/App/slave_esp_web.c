@@ -1,11 +1,16 @@
+#include "slave_web_control.h"
 #include "slave_esp_web.h"
 #include "esp_at_uart.h"
 #include "slave_bme280.h"
 #include "slave_mq2.h"
+#include "slave_hcsr04.h"
+#include "slave_master_status.h"
+#include "slave_servo_test.h"
 #include "slave_web_page.h"
 #include "esp_ap_config.local.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 /* Include the terminating NUL in this compile-time passphrase check. */
 typedef char EspApPasswordLengthCheck[
@@ -19,15 +24,20 @@ typedef char EspApPasswordLengthCheck[
 #define RETRY_MS 5000U
 #define REQUEST_MAX 2048U
 #define LINE_SIZE 128U
+#define HEADER_SKIP 32U
+#define CONTROL_ID_VALID 64U
+#define CONTROL_HTTP 128U
 
 enum { REQUEST_NONE, REQUEST_PAGE, REQUEST_JSON, REQUEST_ICON,
-       REQUEST_NOT_FOUND, REQUEST_METHOD, REQUEST_BAD, REQUEST_CLOSE };
+       REQUEST_CONTROL_POST, REQUEST_CONTROL_GET, REQUEST_NOT_FOUND, REQUEST_METHOD, REQUEST_BAD, REQUEST_CLOSE };
 enum { EVENT_OK = 1, EVENT_ERROR = 2, EVENT_PROMPT = 4,
        EVENT_SENT = 8, EVENT_READY = 16 };
 typedef struct {
     uint32_t started, tail;
     uint16_t total, line_length;
     uint8_t live, first_line, kind, pending;
+    uint8_t control_id[8], flags, body_length, control_state;
+    uint16_t http_status;
     char line[LINE_SIZE];
 } Connection;
 typedef struct { const char *command, *fallback, *old; uint8_t optional; } InitCommand;
@@ -49,7 +59,7 @@ static const InitCommand g_init[] = {
     {"AT+CIPSERVER=1,80\r\n", 0, 0, 0}, {"AT+CIPSTO=5\r\n", 0, 0, 1}
 };
 static Connection g_connections[CONNECTIONS];
-static char g_line[LINE_SIZE], g_header[192], g_json[512];
+static char g_line[LINE_SIZE], g_header[192], g_json[1280];
 static uint8_t g_tx[CHUNK_SIZE];
 static const char *g_body;
 static uint16_t g_line_length, g_header_length, g_body_length, g_offset, g_chunk;
@@ -64,6 +74,55 @@ static void State(uint32_t state, uint32_t delay)
 {
     SlaveEspWebDiag.state = state;
     g_deadline = g_now + delay;
+}
+static uint8_t JsonAppend(unsigned *length, const char *format, ...)
+{
+    int added;
+    va_list args;
+    if (*length >= sizeof(g_json)) { return 0U; }
+    va_start(args, format);
+    added = vsnprintf(g_json + *length, sizeof(g_json) - *length, format, args);
+    va_end(args);
+    if (added < 0 || (unsigned)added >= sizeof(g_json) - *length) { return 0U; }
+    *length += (unsigned)added;
+    return 1U;
+}
+static uint8_t JsonNumber(unsigned *length, uint8_t valid, uint32_t number)
+{ return JsonAppend(length, valid != 0U ? "%lu" : "null", (unsigned long)number); }
+static uint8_t JsonMonitor(unsigned *length)
+{
+    SlaveMasterStatus master;
+    uint8_t i;
+    SlaveMasterStatus_Get(g_now, &master);
+    if (!JsonAppend(length, ",\"master\":{\"online\":%s,\"rx_age_ms\":", master.online ? "true" : "false") ||
+        !JsonNumber(length, master.online, master.rx_age_ms) ||
+        !JsonAppend(length, ",\"uptime_ms\":") || !JsonNumber(length, master.online, master.uptime_ms) ||
+        !JsonAppend(length, ",\"sample_seq\":") || !JsonNumber(length, master.online, master.sample_seq) ||
+        !JsonAppend(length, ",\"valid\":%s,\"age_ms\":", master.bme_valid ? "true" : "false") ||
+        !JsonNumber(length, master.bme_valid, master.bme_age_ms) ||
+        !JsonAppend(length, ",\"temperature_x10\":") ||
+        !JsonAppend(length, master.bme_valid ? "%d" : "null", (int)master.temperature_x10) ||
+        !JsonAppend(length, ",\"humidity_x10\":") || !JsonNumber(length, master.bme_valid, master.humidity_x10) ||
+        !JsonAppend(length, ",\"pressure_pa\":") || !JsonNumber(length, master.bme_valid, master.pressure_pa) ||
+        !JsonAppend(length, ",\"rain\":") || !JsonNumber(length, master.rain != 0xFFU, master.rain) ||
+        !JsonAppend(length, ",\"dark\":") || !JsonNumber(length, master.dark != 0xFFU, master.dark) ||
+        !JsonAppend(length, ",\"light_on\":") || !JsonNumber(length, master.light_on != 0xFFU, master.light_on) ||
+        !JsonAppend(length, ",\"fan_pwm\":[")) { return 0U; }
+    for (i = 0U; i < 4U; i++)
+    {
+        if ((i != 0U && !JsonAppend(length, ",")) ||
+            !JsonNumber(length, master.fan_pwm[i] != 0xFFU, master.fan_pwm[i])) { return 0U; }
+    }
+    if (!JsonAppend(length, "]},\"windows\":[")) { return 0U; }
+    for (i = 1U; i <= SLAVE_SERVO_COUNT; i++)
+    {
+        const volatile SlaveServoTestDiagnostics *window = SlaveServoTest_GetDiagnostics(i);
+        if (window == 0 || !JsonAppend(length,
+            "%s{\"state\":%lu,\"pulse_us\":%lu,\"error\":%lu}", i == 1U ? "" : ",",
+            (unsigned long)window->state, (unsigned long)window->pulse_us,
+            (unsigned long)window->last_error)) { return 0U; }
+    }
+    return JsonAppend(length, "]}");
 }
 static void ClearClients(void)
 {
@@ -130,6 +189,37 @@ static void SetPending(Connection *c, uint8_t kind)
     SlaveEspWebDiag.request_count++;
     if (kind >= REQUEST_NOT_FOUND) { SlaveEspWebDiag.rejected_count++; }
 }
+static uint8_t Hex(const char *s,uint8_t *id)
+{ uint8_t i,v;for(i=0;i<16U;i++){char c=s[i];if(c>='0'&&c<='9')v=(uint8_t)(c-'0');else if(c>='a'&&c<='f')v=(uint8_t)(c-'a'+10);else if(c>='A'&&c<='F')v=(uint8_t)(c-'A'+10);else return 0U;if(!(i&1U))id[i/2U]=(uint8_t)(v<<4U);else id[i/2U]|=v;}return 1U; }
+static const char *SkipSpace(const char *p){while(*p==' '||*p=='\t'||*p=='\r'||*p=='\n')p++;return p;}
+static uint8_t StringToken(const char **p,char *out,uint8_t cap)
+{ uint8_t n=0U;*p=SkipSpace(*p);if(*(*p)++!='"')return 0U;while(**p&&**p!='"'){if(n+1U>=cap||**p=='\\')return 0U;out[n++]=*(*p)++;}if(*(*p)++!='"')return 0U;out[n]=0;return 1U; }
+static uint8_t ControlJson(Connection *c,uint8_t *payload)
+{
+    const char *p=SkipSpace(c->line);uint8_t seen=0U,bit;char key[16],value[20];
+    memset(payload,0,11U);if(*p++!='{')return 0U;
+    for(;;)
+    {
+        uint16_t number=0U;
+        if(!StringToken(&p,key,sizeof(key))){return 0U;}
+        p=SkipSpace(p);if(*p++!=':')return 0U;
+        if(!strcmp(key,"request_id")){bit=1U;if(!StringToken(&p,value,sizeof(value))||strlen(value)!=16U||!Hex(value,payload+3))return 0U;}
+        else if(!strcmp(key,"type")){bit=2U;if(!StringToken(&p,value,sizeof(value)))return 0U;if(!strcmp(value,"fan"))payload[0]=0x10U;else if(!strcmp(value,"window"))payload[0]=0x11U;else return 0U;}
+        else if(!strcmp(key,"channel")||!strcmp(key,"value"))
+        {bit=(uint8_t)(!strcmp(key,"channel")?4U:8U);p=SkipSpace(p);if(*p<'0'||*p>'9')return 0U;if(*p=='0'&&p[1]>='0'&&p[1]<='9')return 0U;
+         while(*p>='0'&&*p<='9'){number=(uint16_t)(number*10U+(uint16_t)(*p++-'0'));if(number>255U)return 0U;}payload[bit==4U?1U:2U]=(uint8_t)number;}
+        else return 0U;
+        if(seen&bit){return 0U;}
+        seen|=bit;p=SkipSpace(p);if(*p=='}'){p=SkipSpace(p+1);return seen==15U&&!*p&&Web_Valid(payload,11U);}if(*p++!=',')return 0U;
+    }
+}
+static uint8_t HeaderName(const char *s,const char *name)
+{while(*name){char a=*s++,b=*name++;if(a>='A'&&a<='Z')a=(char)(a+32);if(a!=b)return 0U;}return 1U;}
+static uint8_t CriticalHeader(const char *s)
+{
+    return HeaderName(s,"content-length:")||HeaderName(s,"content-type:")||
+           HeaderName(s,"origin:")||HeaderName(s,"host:")||HeaderName(s,"transfer-encoding:");
+}
 static uint8_t Route(const char *line)
 {
     if (strcmp(line, "GET / HTTP/1.1") == 0 || strcmp(line, "GET / HTTP/1.0") == 0)
@@ -138,39 +228,76 @@ static uint8_t Route(const char *line)
         strcmp(line, "GET /api/telemetry HTTP/1.0") == 0) { return REQUEST_JSON; }
     if (strcmp(line, "GET /favicon.ico HTTP/1.1") == 0 ||
         strcmp(line, "GET /favicon.ico HTTP/1.0") == 0) { return REQUEST_ICON; }
+    if(!strcmp(line,"POST /api/control HTTP/1.1"))return REQUEST_CONTROL_POST;
+    if(!strncmp(line,"GET /api/control?id=",20U))return REQUEST_CONTROL_GET;
     if (strncmp(line, "GET ", 4U) == 0) { return REQUEST_NOT_FOUND; }
     return REQUEST_METHOD;
 }
-static void HttpByte(uint8_t id, uint8_t byte)
+static uint8_t Number(const char **cursor,uint32_t limit,uint32_t *value);
+static void HttpByte(uint8_t id,uint8_t byte)
 {
-    Connection *c;
-    if (id >= CONNECTIONS || SlaveEspWebDiag.ready == 0U) { return; }
-    c = &g_connections[id];
-    if (c->live == 0U)
+    Connection *c; if(id>=CONNECTIONS||!SlaveEspWebDiag.ready)return;c=g_connections+id;
+    if(!c->live){c->live=1U;c->started=g_now;SlaveEspWebDiag.active_connections++;}
+    if(c->pending||id==g_active)return;
+    if(++c->total>REQUEST_MAX||!byte){SetPending(c,REQUEST_BAD);return;}
+    if(c->flags&HEADER_SKIP)
     {
-        c->live = 1U; c->started = g_now;
-        SlaveEspWebDiag.active_connections++;
-    }
-    if (c->pending != 0U || id == g_active) { return; }
-    c->total++;
-    if (c->total > REQUEST_MAX || byte == 0U)
-    { SetPending(c, REQUEST_BAD); return; }
-    c->tail = (c->tail << 8U) | byte;
-    if (c->first_line == 0U)
-    {
-        if (byte == '\n')
+        if(byte=='\n')
         {
-            if (c->line_length == 0U || c->line[c->line_length - 1U] != '\r')
-            { SetPending(c, REQUEST_BAD); return; }
-            c->line[c->line_length - 1U] = '\0';
-            c->kind = Route(c->line);
-            c->first_line = 1U;
+            if(c->tail!='\r'){SetPending(c,REQUEST_BAD);return;}
+            c->flags&=(uint8_t)~HEADER_SKIP;c->line_length=0U;
         }
-        else if (c->line_length + 1U < LINE_SIZE)
-        { c->line[c->line_length++] = (char)byte; }
-        else { SetPending(c, REQUEST_BAD); return; }
+        c->tail=byte;return;
     }
-    if (c->tail == 0x0D0A0D0AU) { SetPending(c, c->kind); }
+    if(c->first_line&&c->kind!=REQUEST_CONTROL_POST){c->tail=(c->tail<<8U)|byte;if(c->tail==0x0D0A0D0AU)SetPending(c,c->kind);return;}
+    if(c->flags&16U)
+    {
+        if(c->line_length>=c->body_length){SetPending(c,REQUEST_BAD);return;}
+        c->line[c->line_length++]=(char)byte;
+        if(c->line_length==c->body_length)
+        {
+            uint8_t payload[11];c->line[c->line_length]=0;
+            if(!ControlJson(c,payload)){SetPending(c,REQUEST_BAD);return;}
+            memcpy(c->control_id,payload+3,8U);c->flags|=CONTROL_ID_VALID;c->http_status=SlaveWebControl_Submit(payload,g_now,&c->control_state);SetPending(c,REQUEST_CONTROL_POST);
+        }return;
+    }
+    if(byte!='\n')
+    {
+        if(c->line_length+1U>=LINE_SIZE)
+        {
+            c->line[c->line_length]=0;
+            /* Only discard unrelated header values, never a request line or a checked field. */
+            if(!c->first_line||CriticalHeader(c->line)||!memchr(c->line,':',c->line_length))
+            {SetPending(c,REQUEST_BAD);return;}
+            c->flags|=HEADER_SKIP;c->tail=byte;return;
+        }
+        c->line[c->line_length++]=(char)byte;return;
+    }
+    if(!c->line_length||c->line[c->line_length-1U]!='\r'){SetPending(c,REQUEST_BAD);return;}
+    c->line[--c->line_length]=0;
+    if(!c->first_line)
+    {
+        c->kind=Route(c->line);c->first_line=1U;c->tail=0x0D0AU;
+        if(c->kind==REQUEST_CONTROL_POST||c->kind==REQUEST_CONTROL_GET)c->flags|=CONTROL_HTTP;
+        if(c->kind==REQUEST_CONTROL_GET && (strlen(c->line)!=45U || !Hex(c->line+20,c->control_id)||strcmp(c->line+36," HTTP/1.1"))){SetPending(c,REQUEST_BAD);return;}
+        if(c->kind==REQUEST_CONTROL_GET)c->flags|=CONTROL_ID_VALID;
+    }
+    else if(!c->line_length)
+    {
+        if(c->kind==REQUEST_CONTROL_POST)
+        {if((c->flags&15U)!=15U||!c->body_length){SetPending(c,REQUEST_BAD);return;}c->flags|=16U;}
+        else SetPending(c,c->kind);
+    }
+    else if(c->kind==REQUEST_CONTROL_POST)
+    {
+        if(HeaderName(c->line,"content-length:"))
+        {const char *q=SkipSpace(c->line+15);uint32_t size;if((c->flags&1U)||!Number(&q,96U,&size)||*SkipSpace(q)||!size){SetPending(c,REQUEST_BAD);return;}c->body_length=(uint8_t)size;c->flags|=1U;}
+        else if(HeaderName(c->line,"content-type:")){if((c->flags&2U)||strcmp(SkipSpace(c->line+13),"application/json")){SetPending(c,REQUEST_BAD);return;}c->flags|=2U;}
+        else if(HeaderName(c->line,"origin:")){if((c->flags&4U)||strcmp(SkipSpace(c->line+7),"http://" SLAVE_ESP_IP)){SetPending(c,REQUEST_BAD);return;}c->flags|=4U;}
+        else if(HeaderName(c->line,"host:")){if((c->flags&8U)||(strcmp(SkipSpace(c->line+5),SLAVE_ESP_IP)&&strcmp(SkipSpace(c->line+5),SLAVE_ESP_IP ":80"))){SetPending(c,REQUEST_BAD);return;}c->flags|=8U;}
+        else if(HeaderName(c->line,"transfer-encoding:")){SetPending(c,REQUEST_BAD);return;}
+    }
+    c->line_length=0U;
 }
 static void AtLine(void)
 {
@@ -270,6 +397,25 @@ static void BuildResponse(uint8_t kind)
     g_offset = 0U;
     if (kind == REQUEST_PAGE)
     { g_body = SlaveWebPage; g_body_length = (uint16_t)(sizeof(SlaveWebPage) - 1U); type = "text/html; charset=utf-8"; }
+    else if(kind==REQUEST_CONTROL_POST||kind==REQUEST_CONTROL_GET||
+            (kind==REQUEST_BAD&&(g_connections[g_active].flags&CONTROL_HTTP)))
+    {
+        Connection *c=g_connections+g_active;char id[19]="null";uint8_t i,state,reason;
+        const char *phase;
+        const char *names[]={"success","failed","unknown","busy","queued","waiting","unknown"};
+        if(c->flags&CONTROL_ID_VALID)
+        {id[0]='"';for(i=0U;i<8U;i++){static const char hex[]="0123456789abcdef";id[1U+2U*i]=hex[c->control_id[i]>>4U];id[2U+2U*i]=hex[c->control_id[i]&15U];}id[17]='"';id[18]=0;}
+        state=kind==REQUEST_CONTROL_POST?c->control_state:SlaveWebControl_Status(c->control_id,g_now);
+        reason=SlaveWebControl_Reason(c->control_id,g_now);phase=SlaveWebControl_PhaseName(state);
+        if(kind==REQUEST_BAD){status="400 Bad Request";state=WEB_FAILED;reason=WEB_REASON_INVALID;phase="rejected";}
+        if(kind==REQUEST_CONTROL_POST){if(c->http_status==202U)status="202 Accepted";else if(c->http_status==409U)status="409 Conflict";else if(c->http_status==503U)status="503 Service Unavailable";}
+        if(kind==REQUEST_CONTROL_POST&&c->http_status>=400U)
+        {phase="rejected";reason=c->http_status==503U?WEB_REASON_OFFLINE:state==WEB_BUSY?WEB_REASON_LOCAL_BUSY:WEB_REASON_CONFLICT;}
+        if(kind==REQUEST_CONTROL_GET&&state==WEB_MISSING)status="404 Not Found";
+        length=snprintf(g_json,sizeof(g_json),"{\"request_id\":%s,\"state\":\"%s\",\"phase\":\"%s\",\"reason\":\"%s\"}",id,names[state],phase,SlaveWebControl_ReasonName(reason));
+        if(length<0||(unsigned)length>=sizeof(g_json)){Fail(SLAVE_ESP_ERROR_IPD);return;}
+        g_body=g_json;g_body_length=(uint16_t)length;type="application/json; charset=utf-8";
+    }
     else if (kind == REQUEST_JSON)
     {
         SlaveBme280Sample sample;
@@ -317,6 +463,29 @@ static void BuildResponse(uint8_t kind)
             { Fail(SLAVE_ESP_ERROR_IPD); return; }
             length = (int)offset + added;
         }
+        {
+            unsigned offset = (unsigned)length - 1U;
+            SlaveHcsr04Sample ultrasonic;
+            uint8_t good = SlaveHcsr04_GetSample(g_now, &ultrasonic);
+            if (good != 0U)
+            {
+                if (JsonAppend(&offset,
+                    ",\"ultrasonic\":{\"valid\":true,\"distance_mm\":%u,\"raw_mm\":%u,"
+                    "\"pulse_us\":%u,\"filter_count\":%u,\"sample_seq\":%lu,\"age_ms\":%lu,\"error\":0}",
+                    (unsigned)ultrasonic.distance_mm, (unsigned)ultrasonic.raw_mm,
+                    (unsigned)ultrasonic.pulse_us, (unsigned)ultrasonic.filter_count,
+                    (unsigned long)ultrasonic.sequence, (unsigned long)(g_now - ultrasonic.tick)) == 0U)
+                { Fail(SLAVE_ESP_ERROR_IPD); return; }
+            }
+            else if (JsonAppend(&offset,
+                ",\"ultrasonic\":{\"valid\":false,\"distance_mm\":null,\"raw_mm\":null,"
+                "\"pulse_us\":null,\"filter_count\":0,\"sample_seq\":%lu,\"age_ms\":null,\"error\":%lu}",
+                (unsigned long)SlaveHcsr04Diag.sample_count,
+                (unsigned long)SlaveHcsr04Diag.last_error) == 0U)
+            { Fail(SLAVE_ESP_ERROR_IPD); return; }
+            if (JsonMonitor(&offset) == 0U) { Fail(SLAVE_ESP_ERROR_IPD); return; }
+            length = (int)offset;
+        }
         g_body = g_json; g_body_length = (uint16_t)length;
     }
     else
@@ -330,7 +499,7 @@ static void BuildResponse(uint8_t kind)
     }
     length = snprintf(g_header, sizeof(g_header),
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %u\r\n"
-        "Cache-Control: no-store\r\nConnection: close\r\n\r\n", status, type, (unsigned)g_body_length);
+        "Cache-Control: no-store\r\nConnection: close\r\n%s\r\n", status, type, (unsigned)g_body_length,kind==REQUEST_PAGE?"Content-Encoding: gzip\r\n":"");
     if (length < 0 || (unsigned)length >= sizeof(g_header)) { Fail(SLAVE_ESP_ERROR_IPD); return; }
     g_header_length = (uint16_t)length;
     g_response_started = g_now;

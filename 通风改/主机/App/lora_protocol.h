@@ -2,6 +2,8 @@
 #define LORA_PROTOCOL_H
 
 #include <stdint.h>
+#include "../../monitor_status_wire.h"
+#include "../../web_control_wire.h"
 
 #define LORA_PROTOCOL_HEADER_1              (0xAAU)
 #define LORA_PROTOCOL_HEADER_2              (0x55U)
@@ -12,6 +14,7 @@
 
 #define LORA_PROTOCOL_TELEMETRY_SIZE        (26U)
 #define LORA_PROTOCOL_MQ2_TELEMETRY_SIZE    (34U)
+#define LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE (42U)
 #define LORA_PROTOCOL_LEGACY_TELEMETRY_SIZE (18U)
 #define LORA_PROTOCOL_SINGLE_GROUP          (1U)
 #define LORA_WINDOW_SERVO_ID                (1U) /* Historical default */
@@ -32,6 +35,10 @@
 #define LORA_TELEMETRY_FLAG_SLAVE_ONLINE     (0x04U)
 #define LORA_TELEMETRY_FLAG_ACOUSTIC         (0x08U)
 #define LORA_TELEMETRY_FLAG_MQ2              (0x10U)
+#define LORA_TELEMETRY_FLAG_ULTRASONIC       (0x20U)
+#define LORA_TELEMETRY_ULTRASONIC_OFFSET     (34U)
+#define LORA_TELEMETRY_ULTRASONIC_AGE_OFFSET (40U)
+#define LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS (2000UL)
 #define LORA_TELEMETRY_MQ2_OFFSET            (26U)
 #define LORA_TELEMETRY_MQ2_AGE_OFFSET        (32U)
 #define LORA_TELEMETRY_MQ2_MAX_AGE_MS        (2000UL)
@@ -62,6 +69,7 @@ typedef enum
 {
     LORA_MSG_READ_TELEMETRY = 0x01,
     LORA_MSG_TELEMETRY      = 0x02,
+    LORA_MSG_MASTER_STATUS  = MONITOR_STATUS_TYPE,
     LORA_MSG_SET_FAN_SPEED  = 0x10,
     LORA_MSG_SET_WINDOW     = 0x11,
     LORA_MSG_ACK            = 0x20,

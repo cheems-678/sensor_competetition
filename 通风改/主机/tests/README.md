@@ -1,5 +1,9 @@
 # 主机电脑侧回归测试
 
+- 热点真实控制优化回归：遥测竞争只保存一条网页命令并优先排空、2000 ms期限/回绕、重复/冲突、已有窗口不抢占、第二条不同请求busy、过期不执行；三板链路核对真实PWM入口及ACK匹配和五分钟并行运行，固件不改线格式。
+- 热点控制台新增12/21方向/载荷/CRC、runtime网页来源及同flow跨来源隔离、4风机/窗口、重复/冲突/busy与丢ACK检查；真实UART验证21不被当窗口请求、不启动接收事务，发送队列8秒过期避免卡住原控制。控制室三板整链路新增实际网页控制与5分钟并行运行。原风机在遥测/窗口busy期间改为返回已有ERROR_BUSY，不执行；测试按用户批准仲裁规则更新。
+- 2026-10-06扩展现有协议/runtime/UART测试与真实三板模拟：42字节测距布局、旧18/26/34兼容、独立哨兵、范围/脉宽/年龄、接收与汇总延迟、队列重试原基准、CRC与tick回绕；原功能回归不缩减。产物仅沿现有build/。
+
 - MQ-2同步扩展真实协议/runtime/LoRa UART测试：18/26/34字节及角色flags矩阵、47字节CRC/分包、四字段共同有效与边界、接收事件延迟、汇总入队失败后年龄不刷新、UART排队/失败重试累计原始年龄、2秒失效及tick回绕。旧从机BME/声学兼容保持，MQ-2填FFFF。
 
 - `test_master_rain.c`编译真实`App/master_rain.c`，仅替换HAL GPIO，检查只初始化PA11输入上拉、低有效、200/3000 ms边界、首次未确认FF、短脉冲、双向抖动及tick回绕；不加入Keil测试桩，不证明实板接线。
@@ -20,7 +24,7 @@ New-Item -ItemType Directory -Force build | Out-Null
 $taskCompilerPath = $env:PATH
 try {
     $env:PATH = 'D:/codeblocks/MinGW/bin;' + $taskCompilerPath
-    & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Core/Inc -I../App -I../Bsp test_master_bme280.c ../App/master_bme280.c ../App/master_runtime.c ../App/master_ingress.c -o build/test_master_bme280.exe
+    & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Core/Inc -I../App -I../Bsp test_master_bme280.c ../App/master_bme280.c ../App/master_runtime.c ../App/master_ingress.c ../App/lora_protocol.c -o build/test_master_bme280.exe
     if ($LASTEXITCODE -ne 0) { throw 'Compilation failed' }
     & './build/test_master_bme280.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Test failed' }
@@ -61,3 +65,6 @@ try {
 & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../App -I../Bsp test_master_light_control.c ../App/master_light_control.c -o build/test_master_light_control.exe
 & './build/test_master_light_control.exe'
 ```
+# 主机状态下发回归补充
+
+- 新03状态按共同协议校验：真实runtime快照测试覆盖无控制室查询、周期/忙碌、源有效性与各状态；真实LoRa发送测试覆盖业务优先、接收半帧/静默保护、UART失败不阻塞控制及时间回绕。原BME/雨滴/光敏/四路风机/窗口/协议/发送回归保持。共用头使用 `-I../..`，产物沿用build。

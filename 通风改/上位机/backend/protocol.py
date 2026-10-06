@@ -26,6 +26,8 @@ class LoRaProtocol:
     TELEMETRY_SIZE = 26
     MQ2_TELEMETRY_SIZE = 34
     MQ2_MAX_AGE_MS = 2000
+    ULTRASONIC_TELEMETRY_SIZE = 42
+    ULTRASONIC_MAX_AGE_MS = 2000
     FLAG_MASTER_BME = 0x01
     FLAG_DUAL_BME = 0x02
     FLAG_SLAVE_ONLINE = 0x04
@@ -239,21 +241,26 @@ class LoRaProtocol:
             valid = payload[0] in (0x00, 0x01, 0x03, 0x07)
         elif len(payload) == cls.TELEMETRY_SIZE:
             valid = payload[0] in (0x0B, 0x0F)
-        elif len(payload) == cls.MQ2_TELEMETRY_SIZE:
-            valid = payload[0] in (0x1B, 0x1F)
+        elif len(payload) in (cls.MQ2_TELEMETRY_SIZE, cls.ULTRASONIC_TELEMETRY_SIZE):
+            valid = payload[0] in ((0x1B, 0x1F) if len(payload) == cls.MQ2_TELEMETRY_SIZE else (0x3B, 0x3F))
             raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
             if (raw, pa7_mv, ao_mv, age_ms) != (cls.UINT16_INVALID,) * 4:
                 valid = valid and (raw <= 4095 and pa7_mv <= 3600
                                    and ao_mv <= 7200 and age_ms < cls.MQ2_MAX_AGE_MS)
         else:
             raise ValueError("invalid telemetry payload length")
+        if len(payload) == cls.ULTRASONIC_TELEMETRY_SIZE:
+            distance, raw, pulse, age = struct.unpack_from("<4H", payload, 34)
+            if (distance, raw, pulse, age) != (cls.UINT16_INVALID,) * 4:
+                valid = valid and (100 <= distance <= 500 and 100 <= raw <= 500
+                                   and 0 < pulse < 10000 and age < cls.ULTRASONIC_MAX_AGE_MS)
         if not valid:
             raise ValueError("invalid telemetry payload layout")
 
     @classmethod
     def decode_telemetry(cls, payload: bytes) -> dict:
         cls._validate_telemetry_payload(payload)
-        extended = len(payload) in (cls.TELEMETRY_SIZE, cls.MQ2_TELEMETRY_SIZE)
+        extended = len(payload) in (cls.TELEMETRY_SIZE, cls.MQ2_TELEMETRY_SIZE, cls.ULTRASONIC_TELEMETRY_SIZE)
         # Decode the historical wire slots first; replace them for dual BME.
         values = struct.unpack("<BhHIHHBhH", payload[:cls.LEGACY_TELEMETRY_SIZE])
 
@@ -279,7 +286,7 @@ class LoRaProtocol:
             "master_temperature_c": temperature(values[7]),
             "master_humidity_pct": humidity(values[8]),
         }
-        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F, 0x1B, 0x1F)
+        dual_bme = decoded["flags"] in (0x03, 0x07, 0x0B, 0x0F, 0x1B, 0x1F, 0x3B, 0x3F)
         master_bme = decoded["flags"] == cls.FLAG_MASTER_BME or dual_bme
         decoded.update(
             master_bme_temperature_c=decoded["slave_temperature_c"] if master_bme else None,
@@ -313,11 +320,17 @@ class LoRaProtocol:
                     sound_rms_2=None if sound_right == cls.UINT32_INVALID else sound_right,
                 )
         decoded["mq2"] = dict(valid=False, raw=None, pa7_mv=None, ao_mv=None, age_ms=None)
-        if len(payload) == cls.MQ2_TELEMETRY_SIZE and decoded["slave_online"]:
+        if len(payload) in (cls.MQ2_TELEMETRY_SIZE, cls.ULTRASONIC_TELEMETRY_SIZE) and decoded["slave_online"]:
             raw, pa7_mv, ao_mv, age_ms = struct.unpack_from("<4H", payload, 26)
             if raw != cls.UINT16_INVALID:
                 decoded["mq2"] = dict(valid=True, raw=raw, pa7_mv=pa7_mv,
                                       ao_mv=ao_mv, age_ms=age_ms)
+        decoded["ultrasonic"] = dict(valid=False, distance_mm=None, raw_mm=None, pulse_us=None, age_ms=None)
+        if len(payload) == cls.ULTRASONIC_TELEMETRY_SIZE and decoded["slave_online"]:
+            distance, raw, pulse, age = struct.unpack_from("<4H", payload, 34)
+            if distance != cls.UINT16_INVALID:
+                decoded["ultrasonic"] = dict(valid=True, distance_mm=distance, raw_mm=raw,
+                                              pulse_us=pulse, age_ms=age)
         return decoded
 
 

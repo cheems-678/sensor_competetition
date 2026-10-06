@@ -2,6 +2,7 @@ export interface LogEntry { id: number; text: string }
 export interface ServoState { channel: number; pin: string; status: string }
 export interface FanState { channel: number; pin: string; duty: number; status: string }
 export type Field = 'master_temp' | 'slave_temp' | 'master_humidity' | 'slave_humidity' | 'master_pressure' | 'slave_pressure'
+export interface UltrasonicReading { valid: boolean; distance_mm: number | null; raw_mm: number | null; pulse_us: number | null; age_ms: number | null }
 export interface Snapshot {
   revision: number
   demo: boolean
@@ -14,8 +15,10 @@ export interface Snapshot {
     sounds: { sound_rms_1: string; sound_rms_2: string }
     rain: { state: 0 | 1 | null; source: 'master' | null }
     mq2: { valid: boolean; raw: number | null; pa7_mv: number | null; ao_mv: number | null; age_ms: number | null }
+    ultrasonic: UltrasonicReading
     slave_link: string
     updated_at: string | null
+    sample_id: number
   }
   fans: FanState[]
   window: { busy: boolean; status: string }
@@ -53,7 +56,8 @@ export const initialSnapshot = (): Snapshot => ({
     sounds: { sound_rms_1: '--', sound_rms_2: '--' },
     rain: { state: null, source: null },
     mq2: { valid: false, raw: null, pa7_mv: null, ao_mv: null, age_ms: null },
-    slave_link: '未知', updated_at: null,
+    ultrasonic: { valid: false, distance_mm: null, raw_mm: null, pulse_us: null, age_ms: null },
+    slave_link: '未知', updated_at: null, sample_id: 0,
   },
   fans: ['PB1', 'PB8', 'PA1', 'PB9'].map((pin, index) => ({ channel: index + 1, pin, duty: 0, status: '未发送' })),
   window: { busy: false, status: '未连接，位置未知' },

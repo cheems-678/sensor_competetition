@@ -22,6 +22,8 @@ static uint16_t g_lora_tx_frame_length;
 static uint8_t g_lora_tx_pending;
 static uint32_t g_lora_tx_enqueued_tick;
 static uint16_t g_lora_tx_mq2_age;
+static uint16_t g_lora_tx_ultrasonic_age;
+static uint32_t g_lora_last_tx_tick;
 
 #define LORA_COMMAND_RETRY_COUNT 3U
 #define LORA_RX_PROCESS_BUDGET 128U
@@ -243,6 +245,7 @@ void LORA_Init(void)
   LoRaStreamParser_Init(&g_lora_stream_parser);
   g_lora_last_data_loss_count = 0U;
   g_lora_last_rx_tick = HAL_GetTick() - LORA_TURNAROUND_DELAY_MS;
+  g_lora_last_tx_tick = HAL_GetTick() - LORA_TURNAROUND_DELAY_MS;
   g_lora_parser_initialized = 1U;
   g_lora_tx_pending = 0U;
   g_lora_tx_frame_length = 0U;
@@ -275,6 +278,21 @@ void LoraP2PTX(void)
   {
     if (MasterQueues_ReceiveLoRaTimed(&message, &g_lora_tx_enqueued_tick) == 0U)
     {
+      uint32_t now_ms = HAL_GetTick();
+      /* A one-shot, fresh status can only use an idle radio opportunity.
+         It never becomes the held/retried business frame. */
+      if (g_lora_stream_parser.length != 0U || LoraTransport_HasRx() != 0U ||
+          (uint32_t)(now_ms - g_lora_last_rx_tick) < LORA_TURNAROUND_DELAY_MS ||
+          (uint32_t)(now_ms - g_lora_last_tx_tick) < LORA_TURNAROUND_DELAY_MS ||
+          MasterRuntime_PrepareStatus(&message, now_ms) == 0U)
+      { return; }
+      status = LoRaProtocol_Encode(&message, g_lora_tx_frame,
+                                  sizeof(g_lora_tx_frame), &g_lora_tx_frame_length);
+      if (status != LORA_PROTOCOL_OK) { LoRaDiag.tx_encode_error_count++; return; }
+      if (HAL_UART_Transmit(&huart2, g_lora_tx_frame, g_lora_tx_frame_length, 50U) != HAL_OK)
+      { LoRaDiag.tx_uart_error_count++; }
+      else { LoRaDiag.tx_frame_count++; }
+      g_lora_last_tx_tick = HAL_GetTick();
       return;
     }
 
@@ -289,6 +307,8 @@ void LoraP2PTX(void)
     }
     g_lora_tx_mq2_age = (uint16_t)((uint16_t)g_lora_tx_frame[43] |
                                  ((uint16_t)g_lora_tx_frame[44] << 8U));
+    g_lora_tx_ultrasonic_age = (uint16_t)((uint16_t)g_lora_tx_frame[51] |
+                                       ((uint16_t)g_lora_tx_frame[52] << 8U));
     g_lora_tx_pending = 1U;
   }
 
@@ -323,7 +343,7 @@ void LoraP2PTX(void)
   }
 
   if ((g_lora_tx_frame[3] == LORA_MSG_TELEMETRY) &&
-      (g_lora_tx_frame[10] == LORA_PROTOCOL_MQ2_TELEMETRY_SIZE))
+      (g_lora_tx_frame[10] >= LORA_PROTOCOL_MQ2_TELEMETRY_SIZE))
   {
     uint32_t elapsed = HAL_GetTick() - g_lora_tx_enqueued_tick;
     uint16_t crc;
@@ -336,6 +356,18 @@ void LoraP2PTX(void)
       g_lora_tx_frame[43] = (uint8_t)age;
       g_lora_tx_frame[44] = (uint8_t)(age >> 8U);
     }
+    if (g_lora_tx_frame[10] == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE)
+    {
+      if ((g_lora_tx_ultrasonic_age >= LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS) ||
+          (elapsed >= LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS - g_lora_tx_ultrasonic_age))
+      { memset(&g_lora_tx_frame[45], 0xFF, 8U); }
+      else
+      {
+        uint16_t age = (uint16_t)(g_lora_tx_ultrasonic_age + elapsed);
+        g_lora_tx_frame[51] = (uint8_t)age;
+        g_lora_tx_frame[52] = (uint8_t)(age >> 8U);
+      }
+    }
     crc = LoRaProtocol_Crc16(&g_lora_tx_frame[2],
                             (uint16_t)(9U + g_lora_tx_frame[10]));
     g_lora_tx_frame[g_lora_tx_frame_length - 2U] = (uint8_t)crc;
@@ -346,11 +378,13 @@ void LoraP2PTX(void)
                         g_lora_tx_frame_length,
                         50U) != HAL_OK)
   {
+    g_lora_last_tx_tick = HAL_GetTick();
     LoRaDiag.tx_uart_error_count++;
     /* 保留当前完整帧，下个任务周期重试，不能静默丢失ACK/RESULT。 */
     return;
   }
   g_lora_tx_pending = 0U;
+  g_lora_last_tx_tick = HAL_GetTick();
   if (((g_lora_tx_frame[3] == LORA_MSG_READ_TELEMETRY) ||
        (g_lora_tx_frame[3] == LORA_MSG_SET_WINDOW)) &&
       (g_lora_tx_frame[6] == LORA_ROLE_SLAVE))

@@ -758,6 +758,16 @@
               <FilePath>..\Bsp\bme280.c</FilePath>
             </File>
             <File>
+              <FileName>hcsr04_timer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\hcsr04_timer.c</FilePath>
+            </File>
+            <File>
+              <FileName>slave_hcsr04.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\slave_hcsr04.c</FilePath>
+            </File>
+            <File>
               <FileName>mq2_adc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\mq2_adc.c</FilePath>
@@ -781,6 +791,16 @@
               <FileName>esp_at_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\esp_at_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>slave_master_status.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\slave_master_status.c</FilePath>
+            </File>
+            <File>
+              <FileName>slave_web_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\slave_web_control.c</FilePath>
             </File>
             <File>
               <FileName>slave_esp_web.c</FileName>

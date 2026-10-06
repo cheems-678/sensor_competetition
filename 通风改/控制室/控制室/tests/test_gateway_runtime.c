@@ -391,8 +391,43 @@ static void test_mq2_layout_and_fields(void)
     }
 }
 
+static void test_master_status_does_not_complete_poll(void)
+{
+    uint8_t frame[141];
+    unsigned length;
+    reset(); request(333U, 0U);
+    length = make_frame(frame, 3U, 2U, 333U, 26U, 1U);
+    frame[6] = 3U; frame[7] = 1U; refresh_crc(frame, length);
+    push(0U, frame, length); GatewayRuntime_Process(1U); assert(send_count == 1U);
+    GatewayRuntime_Process(6001U); assert(send_count == 2U);
+    assert(sent[1].port == GATEWAY_OUTPUT_PC && sent[1].bytes[3] == 0x7EU);
+}
+
+static void test_ultrasonic_layout_bounds_crc_split(void)
+{
+    uint8_t frame[141]; unsigned flags,i,j,length; const uint16_t good[4]={500U,500U,9999U,1999U};
+    for(flags=0U;flags<256U;flags++)
+    {
+        reset(); request(950U,0U); length=make_frame(frame,2U,2U,950U,42U,(uint8_t)flags);
+        push(0U,frame,46U); GatewayRuntime_Process(1U); assert(send_count==1U);
+        push(0U,frame+46U,length-46U); GatewayRuntime_Process(2U);
+        assert(send_count==((flags==0x3BU || flags==0x3FU)?2U:1U));
+        if(send_count==2U) assert(sent[1].length==55U && memcmp(sent[1].bytes,frame,length)==0);
+    }
+    for(i=0U;i<10U;i++)
+    {
+        reset(); request(951U,0U); length=make_frame(frame,2U,2U,951U,42U,0x3FU);
+        for(j=0U;j<4U;j++) { frame[45U+2U*j]=(uint8_t)good[j]; frame[46U+2U*j]=(uint8_t)(good[j]>>8U); }
+        if(i<8U) { unsigned field=i/2U; uint16_t v=(i%2U)?65535U:(field<2U?99U:field==2U?0U:2000U); frame[45U+2U*field]=(uint8_t)v; frame[46U+2U*field]=(uint8_t)(v>>8U); }
+        refresh_crc(frame,length); if(i==8U) frame[45]^=1U;
+        push(0U,frame,length); GatewayRuntime_Process(1U); assert(send_count==(i==9U?2U:1U));
+    }
+}
+
 int main(void)
 {
+    test_ultrasonic_layout_bounds_crc_split();
+    test_master_status_does_not_complete_poll();
     test_mq2_layout_and_fields();
     test_all_telemetry_flags();
     test_rain_slot_forwarding_and_crc();
@@ -400,6 +435,6 @@ int main(void)
     test_fan_ack_pending_and_timeout_wrap();
     test_window_shape_and_forwarding();
     test_window_ack_matching_queue_and_timeout();
-    puts("7 real gateway groups passed (telemetry/rain/fan/window, shape/CRC/stream/ACK/queue/wrap)");
+    puts("9 real gateway/ultrasonic groups passed (telemetry/rain/fan/window, shape/CRC/stream/ACK/queue/wrap)");
     return 0;
 }

@@ -83,8 +83,8 @@ uint8_t MasterQueues_ReceiveLoRa(LoRaMessage *message)
 uint8_t MasterQueues_IsLoRaExpired(uint8_t message_type,
                                   uint32_t enqueued_tick, uint32_t now_ms)
 {
-    return ((message_type == LORA_MSG_TELEMETRY) &&
-            ((uint32_t)(now_ms - enqueued_tick) >= MASTER_TELEMETRY_TX_LIFETIME_MS)) ? 1U : 0U;
+    return ((message_type == WEB_RESULT && (uint32_t)(now_ms-enqueued_tick)>=WEB_TIMEOUT_MS) || ((message_type == LORA_MSG_TELEMETRY) &&
+            ((uint32_t)(now_ms - enqueued_tick) >= MASTER_TELEMETRY_TX_LIFETIME_MS))) ? 1U : 0U;
 }
 
 uint8_t MasterQueues_ReceiveLoRaTimed(LoRaMessage *message, uint32_t *enqueued_tick)

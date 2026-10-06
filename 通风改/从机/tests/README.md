@@ -1,5 +1,14 @@
 # 从机电脑侧测试约定
 
+- 真实控制优化回归：长User-Agent/未知头、关键头超长/重复、跨IPD CRLF/正文分包、来源/总长度/参数拒绝和JSON phase/reason；控制服务的排队/发送/超时/设备拒绝与有限诊断；网页不把HTTP拒绝或受理误标执行成功，仍单一HTTP在途且不重发动作。
+- 热点控制台：新test_slave_web_control.c检查准入/去重/冲突/超时/回绕；所有链接slave_protocol_runtime或slave_esp_web的测试增加App/slave_web_control.c。网页生成头为gzip，ESP测试写build/http_page.gz并按真实字节数量验证Content-Length，Node解压核对HTML完全一致。现有网页测试同时检查8页导航/模型缩放/滑块键释放/单一HTTP调度/控制结果/过期草稿取消/10分钟1200点历史；浏览器只使用本机模拟服务。
+- 2026-10-06在test_slave_bme280.c扩展42字节遥测与测距服务替身：有效样本、故障代次、源年龄2秒、重复回复、UART重试、回绕，真实驱动/采样服务仍由现有HC-SR04测试负责。整帧55字节/flags38，原MQ和声学位置保持。
+
+- HC-SR04测试沿用现有目录，`test_hcsr04_timer.c`通过`stubs/hcsr04_timer_platform.h`模拟寄存器和中断，编译真实BSP；`test_slave_hcsr04.c`通过假捕获结果验证真实采样服务。ESP/API测试增加ultrasonic独立失效、原始/滤波值及容量边界；网页回归验证测距2秒时效、失败立即清空及从机重启。不安装依赖、不读取私人口令、不删除测试产物。命令与既有测试相同，分别链接`../Bsp/hcsr04_timer.c`和`../App/slave_hcsr04.c`，使用`-Istubs -I../Bsp`或`-I../App -I../Bsp`。
+
+- 全网页防闪动回归覆盖主/从机标签两秒防抖及恢复、相同值不重写DOM、从机温湿压/MQ/窗口短暂无效和HTTP失败保留、各来源5秒硬过期、无效/重复响应不续时、曲线缺失留空、从机重启清理旧缓存与串行轮询。固件侧API有效期不放宽。
+- 主机网页防闪动回归：模拟2秒边界与下一次轮询交错、短暂无效/请求失败后恢复、重复无效响应不能续时、BME与工作状态独立保留、原始年龄及HTTP耗时累计至5秒清空；从机原2秒失效行为保持。
+- 主机汇总新增 `test_slave_master_status.c` 验证真实缓存/线格式的边界、独立过期、重复/逆序/重启/回绕；原runtime测试检查CRC/地址、忙碌/窗口ACK并行隔离。ESP/API测试链接 `../App/slave_master_status.c`，共用头增加 `-I../..`，覆盖JSON最坏长度、主机离线仍有本地数据、四窗口实际诊断。`generate_slave_web_page.cjs` 从App HTML生成ASCII/八进制C头，网页脚本测试检查源与头一致并覆盖独立过期/断线；浏览器仅用本机模拟数据，不向硬件发控制。
 - MQ-2链路同步扩展现有BME/runtime测试：34字节/47字节整帧、有效零值及4095、重复请求源时间不刷新、发送前2秒失效、UART失败后ADC故障代次作废以及tick回绕；MQ采集使用替身，真实驱动/服务仍由各自测试负责。既有声学26字节输出断言升级为34字节，位置18/22保持。
 
 - ESP密码版构建需 `build/esp_ap_config.local.h` 中的假口令宏 `SLAVE_ESP_AP_PASSWORD`，从 `../App/esp_ap_config.example.h` 复制示例用于测试即可；该文件被Git忽略。下方ESP GCC命令增加 `-Ibuild`，测试不读取设备私人配置。状态机检查现代/旧版两条CWSAP命令均为WPA2，发送的口令与测试配置一致，不打印口令。
@@ -17,7 +26,7 @@
 
 ```powershell
 Copy-Item -LiteralPath '../App/esp_ap_config.example.h' -Destination 'build/esp_ap_config.local.h'
-& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Ibuild -I../App -I../Bsp test_slave_esp_web.c ../App/slave_esp_web.c ../App/slave_servo_test.c -o build/test_slave_esp_web.exe
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Ibuild -I../App -I../Bsp test_slave_esp_web.c ../App/slave_esp_web.c ../App/slave_master_status.c ../App/slave_web_control.c ../App/slave_servo_test.c -o build/test_slave_esp_web.exe
 & './build/test_slave_esp_web.exe'
 & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Bsp test_esp_at_uart.c ../Bsp/esp_at_uart.c -o build/test_esp_at_uart.exe
 & './build/test_esp_at_uart.exe'
@@ -40,7 +49,7 @@ New-Item -ItemType Directory -Force build | Out-Null
 $taskCompilerPath = $env:PATH
 try {
     $env:PATH = 'D:/codeblocks/MinGW/bin;' + $taskCompilerPath
-    & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../App -I../Bsp test_slave_bme280.c ../Bsp/bme280.c ../App/slave_bme280.c ../App/slave_protocol_runtime.c ../App/slave_servo_test.c ../Core/Src/i2c.c -o build/test_slave_bme280.exe
+    & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../App -I../Bsp test_slave_bme280.c ../Bsp/bme280.c ../App/slave_bme280.c ../App/slave_protocol_runtime.c ../App/slave_master_status.c ../App/slave_web_control.c ../App/slave_servo_test.c ../Core/Src/i2c.c -o build/test_slave_bme280.exe
     if ($LASTEXITCODE -ne 0) { throw 'Compilation failed' }
     & './build/test_slave_bme280.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Test failed' }
@@ -87,4 +96,15 @@ SG90 独立测试模式的单轮动作测试沿用以上 PATH 与输出约定，
 ```powershell
 & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -DSLAVE_SERVO_WINDOW_STOP_US=1490U -DSLAVE_SERVO_WINDOW_RUN_MS=250U -I../App -I../Bsp test_slave_servo_test.c ../App/slave_servo_test.c -o build/test_slave_servo_calibrated.exe
 & './build/test_slave_servo_calibrated.exe'
+```
+
+状态缓存：`gcc -std=c99 -Wall -Wextra -Werror -I../App test_slave_master_status.c ../App/slave_master_status.c -o build/test_slave_master_status.exe`，随后运行该程序。编辑网页后先执行 `node generate_slave_web_page.cjs`，再执行ESP/API测试生成真实JSON夹具及 `node check_slave_web_page.cjs`。
+
+HC-SR04回归（在本目录执行，沿用上方MinGW PATH约定）：
+
+```powershell
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -Istubs -I../Bsp test_hcsr04_timer.c ../Bsp/hcsr04_timer.c -o build/test_hcsr04_timer.exe
+& './build/test_hcsr04_timer.exe'
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../App -I../Bsp test_slave_hcsr04.c ../App/slave_hcsr04.c -o build/test_slave_hcsr04.exe
+& './build/test_slave_hcsr04.exe'
 ```

@@ -6,6 +6,9 @@ static LoRaRxRing g_lora_rx_ring;
 static volatile uint8_t g_application_mode;
 static volatile uint32_t g_uart_error_count;
 
+uint8_t LoraTransport_HasRx(void)
+{ return (LoRaRxRing_Count(&g_lora_rx_ring) != 0U) ? 1U : 0U; }
+
 void LoraTransport_Init(void)
 {
     LoRaRxRing_Init(&g_lora_rx_ring);

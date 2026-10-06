@@ -55,7 +55,7 @@ class ProtocolV4Tests(unittest.TestCase):
         decoded = UPPER.LoRaProtocol.decode_telemetry(payload)
         self.assertEqual(decoded["flags"], 0)
         for key, value in decoded.items():
-            if key == "mq2":
+            if key in ("mq2", "ultrasonic"):
                 self.assertFalse(value["valid"])
                 self.assertTrue(all(item is None for name, item in value.items() if name != "valid"))
             elif key != "flags":
@@ -279,15 +279,18 @@ class TelemetryPollingTests(unittest.TestCase):
             sound_vars={name: ValueStub("old") for name, _ in UPPER.MonitorApp.SOUND_LABELS},
             rain_var=ValueStub("old"),
             MQ2_LABELS=UPPER.MonitorApp.MQ2_LABELS,
+            ULTRASONIC_LABELS=UPPER.MonitorApp.ULTRASONIC_LABELS,
             mq2_vars={name: ValueStub("--") for name, _, _ in UPPER.MonitorApp.MQ2_LABELS},
             mq2=dict(valid=False), _mq2_received_at=None, _mq2_source_age=None,
+            ultrasonic_vars={name: ValueStub("--") for name, _, _ in UPPER.MonitorApp.ULTRASONIC_LABELS},
+            ultrasonic=dict(valid=False), _ultrasonic_received_at=None, _ultrasonic_source_age=None,
             slave_link_var=ValueStub("old"),
             last_telemetry_at=99.0,
             fan_status_vars={channel: ValueStub("ready") for channel in (1, 2, 3, 4)},
             _next_flow=Mock(side_effect=range(1, 100)), _send=Mock(return_value=True),
             _append_log=Mock(), database=Mock(), stop_event=Mock(), connect_button=Mock(),
         )
-        for name in ("_request_telemetry", "_poll_telemetry", "_clear_telemetry", "_handle_frame", "_disconnect", "_refresh_mq2"):
+        for name in ("_request_telemetry", "_poll_telemetry", "_clear_telemetry", "_handle_frame", "_disconnect", "_refresh_mq2", "_refresh_ultrasonic"):
             setattr(self.app, name, MethodType(getattr(UPPER.MonitorApp, name), self.app))
         bind_window_controls(self.app)
 

@@ -1,5 +1,8 @@
 # 控制室电脑侧协议回归
 
+- 2026-10-06测距扩展：gateway_runtime.c接受42字节/flags3B或3F，分别校验MQ和测距共同有效性/范围，兼容旧18/26/34，沿原查询事务转发55字节。扩展本目录gateway及真实三板链路测试，测距服务替身不加入固件；验证非法字段、CRC、分包、失联和各传感器独立性。Keil后交付控制室hcsr04_chain_20261006角色留档，用户配套烧录。
+
+- 新03主机→从机状态由控制室忽略，不转发PC、不完成控制室待确认事务。模拟整链路测试连接真实主机状态快照、协议、从机独立缓存，验证无需PC即可同步，以及原窗口/遥测/ACK并行隔离。共用头增加 `-I../../../..`；从机runtime编译链接新增 `slave_master_status.c`，产物沿用build，控制室业务代码不因本功能修改。
 MQ-2同步按 `../../../PROTOCOL_V4.md` 的34字节遥测及flags1B/1F透传，兼容18/26字节，严格校验四个MQ字段的共同有效性及边界。新增模拟整链路检查，不改变风机/窗口指令、不自动烧录。
 
 - 四路扩展沿用现有gateway及整链路测试，编号1..4验证后原样转发，0/5拒收；整链路PWM替身按编号记录，验证不同路并行动作及停止时间独立。下方单只章节为历史基线，编号1限制由四路约定取代。
@@ -43,7 +46,7 @@ Keil构建和用户手动烧录后，再验收控制室到主机双向通信、3
 ```powershell
 & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../../../从机/tests/stubs -I../../../从机/App -I../../../从机/Bsp -c ../../../从机/App/slave_protocol_runtime.c -o build/chain_slave_runtime.o
 if ($LASTEXITCODE -ne 0) { throw 'Slave runtime compilation failed' }
-& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../../../主机/tests/stubs -I../../../主机/App -I../../../主机/Bsp -I../../../从机/App -I../../../从机/Bsp -I../Bsp test_window_chain.c ../Bsp/gateway_runtime.c ../../../主机/App/lora_protocol.c ../../../主机/App/master_runtime.c ../../../主机/App/master_ingress.c ../../../主机/App/master_queues.c ../../../从机/App/slave_servo_test.c build/chain_slave_runtime.o -o build/test_window_chain.exe
+& 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../../../主机/tests/stubs -I../../../主机/App -I../../../主机/Bsp -I../../../从机/App -I../../../从机/Bsp -I../Bsp test_window_chain.c ../Bsp/gateway_runtime.c ../../../主机/App/lora_protocol.c ../../../主机/App/master_runtime.c ../../../主机/App/master_ingress.c ../../../主机/App/master_queues.c ../../../从机/App/slave_servo_test.c ../../../从机/App/slave_master_status.c ../../../从机/App/slave_web_control.c build/chain_slave_runtime.o -o build/test_window_chain.exe
 if ($LASTEXITCODE -ne 0) { throw 'Chain compilation failed' }
 & './build/test_window_chain.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Chain test failed' }

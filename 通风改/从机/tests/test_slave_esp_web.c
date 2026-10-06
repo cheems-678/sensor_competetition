@@ -1,10 +1,13 @@
+#include "slave_web_control.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #include "slave_esp_web.h"
 #include "slave_bme280.h"
 #include "slave_mq2.h"
+#include "slave_hcsr04.h"
 #include "slave_servo_test.h"
+#include "slave_master_status.h"
 #include "esp_at_uart.h"
 #include "esp_ap_config.local.h"
 
@@ -13,8 +16,11 @@ volatile SlaveBme280Diagnostics SlaveBme280Diag;
 volatile SlaveMq2Diagnostics SlaveMq2Diag;
 static SlaveMq2Sample mq_sample;
 static uint8_t mq_valid;
+volatile SlaveHcsr04Diagnostics SlaveHcsr04Diag;
+static SlaveHcsr04Sample ultrasonic;
+static uint8_t ultrasonic_valid;
 static uint32_t now;
-static char rx[32768], responses[5][16384], last_tx[513];
+static char rx[32768], responses[5][24576], last_tx[513];
 static unsigned head, tail, response_length[5], raw_remaining, raw_id;
 static unsigned tx_count, resets, closes, pads, max_tx, modern, ancient;
 static unsigned ap_cur_count, ap_fallback_count;
@@ -65,7 +71,12 @@ uint8_t EspAtUart_StartTx(const uint8_t *data, uint16_t size)
         raw_remaining = 0U;
         if (!suppress_send)
         {
-            if (early_close)
+            unsigned content_length = 0U;
+            const char *header_end = strstr(responses[raw_id], "\r\n\r\n");
+            const char *length_field = strstr(responses[raw_id], "Content-Length: ");
+            if (early_close && header_end && length_field &&
+                sscanf(length_field, "Content-Length: %u", &content_length) == 1 &&
+                response_length[raw_id] == (unsigned)(header_end + 4 - responses[raw_id]) + content_length)
             {
                 char closed[32];
                 snprintf(closed, sizeof(closed), "%u,CLOSED\r\nSEND OK\r\n", raw_id);
@@ -123,6 +134,11 @@ uint8_t SlaveMq2_GetSample(uint32_t tick, SlaveMq2Sample *out)
     if (!mq_valid || (uint32_t)(tick - mq_sample.tick) >= SLAVE_MQ2_MAX_AGE_MS) { return 0U; }
     *out = mq_sample; return 1U;
 }
+uint8_t SlaveHcsr04_GetSample(uint32_t tick, SlaveHcsr04Sample *out)
+{
+    if (!ultrasonic_valid || (uint32_t)(tick - ultrasonic.tick) >= SLAVE_HCSR04_MAX_AGE_MS) { return 0U; }
+    *out = ultrasonic; return 1U;
+}
 uint8_t Sg90TestPwm_StartChannel(uint8_t id, uint16_t pulse)
 { assert(id >= 1U && id <= 4U); pulses[id - 1U] = pulse; return 1U; }
 uint8_t Sg90TestPwm_SetChannelPulse(uint8_t id, uint16_t pulse)
@@ -145,6 +161,8 @@ static void step(unsigned count)
 }
 static void reset(uint32_t start)
 {
+    SlaveMasterStatus_Init();
+    SlaveWebControl_Init();
     now = start;
     memset(responses, 0, sizeof(responses));
     memset(response_length, 0, sizeof(response_length));
@@ -156,6 +174,12 @@ static void reset(uint32_t start)
     sample.temperature_x10 = -125; sample.humidity_x10 = 0U; sample.pressure_pa = 100123U;
     SlaveBme280Diag.sample_tick = start + 1300U;
     SlaveBme280Diag.sample_success_count = 42U;
+    ultrasonic_valid = 1U;
+    memset((void *)&SlaveHcsr04Diag, 0, sizeof(SlaveHcsr04Diag));
+    ultrasonic.raw_mm = 300U; ultrasonic.distance_mm = 299U;
+    ultrasonic.pulse_us = 1749U; ultrasonic.filter_count = 5U;
+    ultrasonic.tick = start + 1300U; ultrasonic.sequence = 7U;
+    SlaveHcsr04Diag.sample_count = 7U;
     mq_valid = 1U;
     mq_sample.raw = 2048U; mq_sample.pa7_mv = 1650U; mq_sample.ao_mv = 3301U;
     mq_sample.tick = start + 1300U; mq_sample.sequence = 123U;
@@ -202,7 +226,7 @@ static void response_size(unsigned id)
     const char *body = strstr(responses[id], "\r\n\r\n");
     unsigned size;
     assert(length && body && sscanf(length, "Content-Length: %u", &size) == 1);
-    assert(size == strlen(body + 4));
+    assert(size == response_length[id]-(unsigned)(body+4-responses[id]));
 }
 static void test_init_and_data(void)
 {
@@ -225,8 +249,8 @@ static void test_init_and_data(void)
     assert(ap_cur_count == 1U && ap_fallback_count == 1U);
     assert(SlaveEspWebDiag.at_version[0] == '\0');
     request(0U, "/"); finish(1U); response_size(0U);
-    assert(strstr(responses[0], "<!doctype html>"));
-    assert(strstr(responses[0], "</html>"));
+    assert(strstr(responses[0], "Content-Encoding: gzip"));
+    {const char *b=strstr(responses[0],"\r\n\r\n")+4;FILE *f=fopen("build/http_page.gz","wb");assert(f);assert((unsigned char)b[0]==31U&&(unsigned char)b[1]==139U);fwrite(b,1,response_length[0]-(unsigned)(b-responses[0]),f);fclose(f);}
     reset(0U); ready();
     assert(ap_cur_count == 1U && ap_fallback_count == 0U);
 }
@@ -366,14 +390,134 @@ static void test_mq2_independence(void)
     SlaveBme280Diag.sample_tick = now; SlaveBme280Diag.sample_success_count = 0xFFFFFFFFU;
     sample.temperature_x10 = -32767; sample.humidity_x10 = 65534U; sample.pressure_pa = 0xFFFFFFFEU;
     request(3U, "/api/telemetry"); finish(4U);
-    assert(strstr(responses[3], "\"ao_mv\":6600}}"));
+    assert(strstr(responses[3], "\"ao_mv\":6600}"));
     assert(SlaveEspWebDiag.ready && SlaveEspWebDiag.last_error == 0U);
+}
+static void test_ultrasonic_snapshot(void)
+{
+    reset(0U); ready(); valid_sample = mq_valid = 0U;
+    request(0U, "/api/telemetry"); finish(1U); response_size(0U);
+    assert(strstr(responses[0], "\"ultrasonic\":{\"valid\":true,\"distance_mm\":299,\"raw_mm\":300"));
+    assert(strstr(responses[0], "\"pulse_us\":1749,\"filter_count\":5"));
+    assert(ultrasonic.tick == 1300U && ultrasonic.sequence == 7U);
+    ultrasonic_valid = 0U; SlaveHcsr04Diag.last_error = SLAVE_HCSR04_ERROR_TIMEOUT;
+    valid_sample = mq_valid = 1U;
+    request(1U, "/api/telemetry"); finish(2U); response_size(1U);
+    assert(strstr(responses[1], "\"ultrasonic\":{\"valid\":false,\"distance_mm\":null"));
+    assert(strstr(responses[1], "\"error\":4}"));
+    assert(strstr(responses[1], "\"mq2\":{\"valid\":true"));
+    ultrasonic_valid = 1U; ultrasonic.tick = now - SLAVE_HCSR04_MAX_AGE_MS;
+    request(2U, "/api/telemetry"); finish(3U);
+    assert(strstr(responses[2], "\"ultrasonic\":{\"valid\":false"));
+    now = 0xFFFFFF00U; ultrasonic.tick = now; ultrasonic.sequence = 0xFFFFFFFFU;
+    SlaveHcsr04Diag.sample_count = 0xFFFFFFFFU;
+    request(3U, "/api/telemetry"); finish(4U); response_size(3U);
+    assert(strstr(responses[3], "\"ultrasonic\":{\"valid\":true"));
+}
+static void test_combined_monitor_snapshot(void)
+{
+    uint8_t payload[26];
+    FILE *fixture;
+    const char *body;
+    reset(0U); ready();
+    memset(payload, 0, sizeof(payload)); payload[0] = 1U;
+    payload[1] = (uint8_t)(uint16_t)-234; payload[2] = (uint8_t)((uint16_t)-234 >> 8U);
+    payload[3] = (uint8_t)550U; payload[4] = (uint8_t)(550U >> 8U);
+    payload[5] = (uint8_t)100100UL; payload[6] = (uint8_t)(100100UL >> 8U); payload[7] = 1U;
+    payload[9] = 100U; payload[11] = 0U; payload[12] = payload[13] = 1U;
+    payload[14] = 0U; payload[15] = 25U; payload[16] = 50U; payload[17] = 100U;
+    memset(payload+18U, 255U, 8U);
+    assert(SlaveMasterStatus_Accept(1U, payload, 26U, now));
+    assert(SlaveServoTest_SetWindowChannel(2U, 1U, now));
+    request(0U, "/api/telemetry"); finish(1U); response_size(0U);
+    assert(strstr(responses[0], "\"master\":{\"online\":true"));
+    assert(strstr(responses[0], "\"temperature_x10\":-234"));
+    assert(strstr(responses[0], "\"fan_pwm\":[0,25,50,100]"));
+    assert(strstr(responses[0], "\"state\":6,\"pulse_us\":1700,\"error\":0"));
+    body = strstr(responses[0], "\r\n\r\n") + 4;
+    fixture = fopen("build/combined_telemetry_fixture.json", "wb"); assert(fixture);
+    assert(fwrite(body, 1U, strlen(body), fixture) == strlen(body)); assert(fclose(fixture) == 0);
+    step(1900U); SlaveBme280Diag.sample_tick = now; mq_sample.tick = now;
+    request(1U, "/api/telemetry"); finish(2U);
+    assert(strstr(responses[1], "\"online\":true") && strstr(responses[1], "\"temperature_x10\":null"));
+    step(1200U); SlaveBme280Diag.sample_tick = now; mq_sample.tick = now;
+    request(2U, "/api/telemetry"); finish(3U);
+    assert(strstr(responses[2], "\"master\":{\"online\":false"));
+    assert(strstr(responses[2], "\"fan_pwm\":[null,null,null,null]"));
+    assert(strstr(responses[2], "\"temperature_x10\":-125"));
+    now = 0xFFFFFF00U; SlaveBme280Diag.sample_tick = now;
+    SlaveBme280Diag.sample_success_count = mq_sample.sequence = 0xFFFFFFFFU;
+    mq_sample.tick = now; mq_sample.raw = 4095U; mq_sample.pa7_mv = 3300U; mq_sample.ao_mv = 6600U;
+    assert(SlaveMasterStatus_Accept(2U, payload, 26U, now));
+    SlaveServoTestDiag.state = SlaveServoTestDiag.pulse_us = SlaveServoTestDiag.last_error = 0xFFFFFFFFU;
+    ultrasonic_valid = 1U; ultrasonic.tick = now; ultrasonic.sequence = 0xFFFFFFFFU;
+    ultrasonic.raw_mm = ultrasonic.distance_mm = 500U; ultrasonic.pulse_us = 2916U;
+    request(3U, "/api/telemetry"); finish(4U); response_size(3U);
+    assert(SlaveEspWebDiag.ready && SlaveEspWebDiag.last_error == 0U);
+}
+static void control_post(unsigned id,const char *origin,const char *body,uint8_t split)
+{
+    char req[256];unsigned n;snprintf(req,sizeof(req),"POST /api/control HTTP/1.1\r\nHost: 192.168.4.1\r\nOrigin: %s\r\nContent-Type: application/json\r\nContent-Length: %u\r\n\r\n",origin,(unsigned)strlen(body));ipd(id,req);
+    if(split){char part[97];n=(unsigned)strlen(body)/2;memcpy(part,body,n);part[n]=0;ipd(id,part);step(5U);assert(SlaveEspWebDiag.response_count==0U);ipd(id,body+n);}else ipd(id,body);
+}
+static void test_control_http(void)
+{
+    uint8_t status[26],p[11],result[9];uint16_t flow;
+    const char *body="{\"request_id\":\"0102030405060708\",\"type\":\"fan\",\"channel\":4,\"value\":75}";
+    reset(0U);ready();memset(status,255,sizeof(status));status[0]=1;status[1]=0;status[2]=128;assert(SlaveMasterStatus_Accept(1,status,26,now));
+    control_post(0,"http://192.168.4.1",body,1);finish(1);assert(strstr(responses[0],"202 Accepted"));assert(strstr(responses[0],"queued"));
+    assert(strstr(responses[0],"\"phase\":\"radio_queued\"")&&strstr(responses[0],"\"reason\":\"none\""));
+    assert(SlaveWebControl_Prepare(p,&flow,now)&&p[0]==0x10U&&p[1]==4U&&p[2]==75U);SlaveWebControl_Sent(1,now);memcpy(result,p+3,8);result[8]=0;SlaveWebControl_Accept(flow,result,9,now);
+    request(1,"/api/control?id=0102030405060708");finish(2);assert(strstr(responses[1],"success"));response_size(1);
+    control_post(2,"http://192.168.4.1",body,0);finish(3);assert(strstr(responses[2],"200 OK")&&strstr(responses[2],"success"));assert(!SlaveWebControl_Prepare(p,&flow,now));
+    control_post(3,"http://attacker.invalid",body,0);finish(4);assert(strstr(responses[3],"400 Bad Request"));
+    assert(strstr(responses[3],"application/json")&&strstr(responses[3],"\"phase\":\"rejected\"")&&strstr(responses[3],"invalid_request"));
+    request(4,"/api/control?id=1111111111111111");finish(5);assert(strstr(responses[4],"404 Not Found"));
+    reset(0U);ready();control_post(0,"http://192.168.4.1",body,0);finish(1);assert(strstr(responses[0],"503 Service Unavailable"));assert(!SlaveWebControl_Prepare(p,&flow,now));
+    assert(strstr(responses[0],"master_offline"));
+    reset(0U);ready();control_post(0,"http://192.168.4.1","{\"request_id\":\"0102030405060708\",\"type\":\"fan\",\"channel\":5,\"value\":75}",0);finish(1);assert(strstr(responses[0],"400 Bad Request"));
+}
+static void test_browser_headers(void)
+{
+    uint8_t status[26],p[11];uint16_t flow;unsigned i,j;
+    char headers[2600],extra[2200],part[32];
+    const char *body="{\"request_id\":\"0102030405060708\",\"type\":\"fan\",\"channel\":4,\"value\":75}";
+    const char *names[]={"User-Agent: ","X-Browser-Test: ","Origin: ","Content-Type: ","Host: ","Content-Length: ","Transfer-Encoding: "};
+    for(i=0U;i<9U;i++)
+    {
+        reset(0U);ready();memset(status,255,sizeof(status));status[0]=1U;status[1]=0U;status[2]=128U;
+        assert(SlaveMasterStatus_Accept(1U,status,26U,now));
+        if(i==7U)strcpy(extra,"Host: 192.168.4.1\r\n");
+        else if(i==8U)strcpy(extra,"Origin: http://192.168.4.1\r\n");
+        else {strcpy(extra,names[i]);j=(unsigned)strlen(extra);memset(extra+j,'A',400U);strcpy(extra+j+400U,"\r\n");}
+        snprintf(headers,sizeof(headers),"POST /api/control HTTP/1.1\r\nHost: 192.168.4.1\r\nOrigin: http://192.168.4.1\r\nContent-Type: application/json\r\nContent-Length: %u\r\n%s\r\n%s",(unsigned)strlen(body),extra,body);
+        for(j=0U;j<strlen(headers);j+=31U)
+        {unsigned n=(unsigned)strlen(headers+j);if(n>31U)n=31U;memcpy(part,headers+j,n);part[n]=0;ipd(0U,part);step(1U);}
+        finish(1U);
+        if(i<2U)
+        {assert(strstr(responses[0],"202 Accepted"));assert(SlaveWebControl_Prepare(p,&flow,now));assert(p[1]==4U&&p[2]==75U);}
+        else
+        {assert(strstr(responses[0],"400 Bad Request"));assert(strstr(responses[0],"invalid_request"));assert(!SlaveWebControl_Prepare(p,&flow,now));}
+        response_size(0U);
+    }
+    /* An unrelated long field cannot bypass CRLF framing or the total request budget. */
+    for(i=0U;i<2U;i++)
+    {
+        reset(0U);ready();strcpy(extra,"User-Agent: ");memset(extra+12,'A',i?1970U:200U);
+        strcpy(extra+12+(i?1970U:200U),i?"\r\n":"\n");
+        snprintf(headers,sizeof(headers),"POST /api/control HTTP/1.1\r\nHost: 192.168.4.1\r\nOrigin: http://192.168.4.1\r\nContent-Type: application/json\r\nContent-Length: %u\r\n%s\r\n%s",(unsigned)strlen(body),extra,body);
+        ipd(0U,headers);finish(1U);assert(strstr(responses[0],"400 Bad Request"));assert(!SlaveWebControl_Prepare(p,&flow,now));
+    }
 }
 int main(void)
 {
+    test_browser_headers();
+    test_control_http();
     test_init_and_data(); test_stream_and_connections(); test_http_limits();
     test_recovery_and_servo(); test_wrap_and_invalid_ipd();
     test_mq2_independence();
+    test_ultrasonic_snapshot();
+    test_combined_monitor_snapshot();
     puts("PASS: ESP AT/HTTP state machine, freshness, recovery, connections and timed servos");
     return 0;
 }

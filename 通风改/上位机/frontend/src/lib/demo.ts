@@ -7,6 +7,7 @@ export class BrowserDemo implements DesktopAPI {
   private logId = 0
   private noticeId = 0
   private nextReading = 0
+  private sampleId = 0
   private mq2ReceivedAt = Date.now()
   private mq2SourceAge = 0
   private previewSmokeMv: number | null = null
@@ -29,9 +30,10 @@ export class BrowserDemo implements DesktopAPI {
       this.state.window.status = '开窗启动PWM已确认（完成/停止状态未知）；ACK 不表示动作完成、自动停止成功或机械窗户到位。'
       this.state.telemetry = {
         values: { master_temp: '-3276.7 °C', slave_temp: '3276.7 °C', master_humidity: '6553.4 %', slave_humidity: '6553.4 %', master_pressure: '4294967294 Pa', slave_pressure: '4294967294 Pa' },
-        sounds: { sound_rms_1: '0', sound_rms_2: '4294967294' }, slave_link: '未知（旧布局）', updated_at: '2026-10-04 23:59:59',
+        sounds: { sound_rms_1: '0', sound_rms_2: '4294967294' }, slave_link: '未知（旧布局）', updated_at: '2026-10-04 23:59:59', sample_id: ++this.sampleId,
         rain: { state: null, source: null },
         mq2: { valid: true, raw: 4095, pa7_mv: 3300, ao_mv: 6600, age_ms: 0 },
+        ultrasonic: { valid: true, distance_mm: 500, raw_mm: 500, pulse_us: 2915, age_ms: 0 },
       }
       this.nextReading = Infinity
       this.sync()
@@ -57,9 +59,10 @@ export class BrowserDemo implements DesktopAPI {
     this.mq2ReceivedAt = Date.now(); this.mq2SourceAge = 60
     this.state.telemetry = {
       values: { master_temp: '24.6 °C', slave_temp: '23.8 °C', master_humidity: '48.2 %', slave_humidity: '51.4 %', master_pressure: '101326 Pa', slave_pressure: '101284 Pa' },
-      sounds: { sound_rms_1: '0', sound_rms_2: '186' }, slave_link: '在线', updated_at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      sounds: { sound_rms_1: '0', sound_rms_2: '186' }, slave_link: '在线', updated_at: new Date().toLocaleTimeString('zh-CN', { hour12: false }), sample_id: ++this.sampleId,
       rain: { state: null, source: null },
       mq2: { valid: true, raw: Math.round(smokeMv / 3300 * 4095), pa7_mv: smokeMv, ao_mv: smokeMv * 2, age_ms: 60 },
+      ultrasonic: { valid: true, distance_mm: 250, raw_mm: 252, pulse_us: 1469, age_ms: 60 },
     }
     this.nextReading = Date.now() + 1000
     this.state.revision++
@@ -127,6 +130,10 @@ export class BrowserDemo implements DesktopAPI {
       const age = this.mq2SourceAge + Date.now() - this.mq2ReceivedAt
       this.state.telemetry.mq2 = age >= 2000 ? initialSnapshot().telemetry.mq2 : { ...this.state.telemetry.mq2, age_ms: age }
       this.state.revision++
+    }
+    if (this.state.telemetry.ultrasonic.valid) {
+      const age = this.mq2SourceAge + Date.now() - this.mq2ReceivedAt
+      this.state.telemetry.ultrasonic = age >= 2000 ? initialSnapshot().telemetry.ultrasonic : { ...this.state.telemetry.ultrasonic, age_ms: age }
     }
     return structuredClone({ ...this.state, logs: this.state.logs.filter(log => log.id > after_log_id) })
   }

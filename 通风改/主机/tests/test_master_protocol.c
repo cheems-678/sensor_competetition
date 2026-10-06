@@ -335,8 +335,84 @@ static void test_mq2_fields_bounds_crc_and_stream(void)
     assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_OK);
 }
 
+static void test_master_status_shape_crc_and_stream(void)
+{
+    LoRaMessage message, decoded;
+    LoRaStreamParser parser;
+    uint8_t frame[141];
+    uint16_t length;
+    unsigned i;
+    memset(&message, 0, sizeof(message));
+    message.version = 4U; message.type = LORA_MSG_MASTER_STATUS;
+    message.source_role = 2U; message.source_group = 1U;
+    message.destination_role = 3U; message.destination_group = 1U;
+    message.payload_length = 26U; memset(message.payload, 255U, 26U);
+    message.payload[0] = 1U; message.payload[1] = 0U; message.payload[2] = 128U;
+    assert(LoRaProtocol_Encode(&message, frame, sizeof(frame), &length) == LORA_PROTOCOL_OK);
+    assert(length == 39U); LoRaStreamParser_Init(&parser);
+    for (i = 0U; i < length; i++)
+    { assert(LoRaStreamParser_PushByte(&parser, frame[i], &decoded) == (i+1U == length ? LORA_STREAM_FRAME_READY : LORA_STREAM_WAITING)); }
+    assert(decoded.type == 3U && memcmp(decoded.payload, message.payload, 26U) == 0);
+    frame[22U] ^= 1U; assert(LoRaProtocol_Decode(frame, length, &decoded) == LORA_PROTOCOL_CRC_MISMATCH);
+    message.destination_role = 1U; message.destination_group = 0U;
+    assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_INVALID_DIRECTION);
+    message.destination_role = 3U; message.destination_group = 1U;
+    message.payload[11] = 2U; assert(LoRaProtocol_ValidateMessage(&message) == LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+}
+
+static void test_ultrasonic_layout_bounds_and_crc(void)
+{
+    LoRaMessage m, decoded; LoRaStreamParser parser;
+    uint8_t frame[141]; uint16_t length; unsigned role, flags, i, j;
+    uint16_t values[4] = {500U, 500U, 9999U, 1999U};
+    for (role=2U; role<=3U; role++) for (flags=0U; flags<256U; flags++)
+    {
+        m = telemetry((uint8_t)role, 42U, (uint8_t)flags);
+        assert((LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_OK)==
+               (role==3U ? flags==0x38U : (flags==0x3BU || flags==0x3FU)));
+    }
+    m=telemetry(3U,42U,0x38U);
+    for (i=0U;i<4U;i++) { m.payload[34U+2U*i]=(uint8_t)values[i]; m.payload[35U+2U*i]=(uint8_t)(values[i]>>8U); }
+    assert(LoRaProtocol_Encode(&m,frame,sizeof(frame),&length)==LORA_PROTOCOL_OK && length==55U);
+    LoRaStreamParser_Init(&parser);
+    for(i=0U;i<length;i++) assert(LoRaStreamParser_PushByte(&parser,frame[i],&decoded)==(i+1U==length ? LORA_STREAM_FRAME_READY : LORA_STREAM_WAITING));
+    assert(memcmp(m.payload,decoded.payload,42U)==0);
+    frame[45]^=1U; assert(LoRaProtocol_Decode(frame,length,&decoded)==LORA_PROTOCOL_CRC_MISMATCH);
+    for(i=0U;i<4U;i++)
+    {
+        const uint16_t bad[4]={0U,99U,10000U,65535U};
+        for(j=0U;j<4U;j++)
+        {
+            uint16_t v = (i<2U && j==2U) ? 501U : (i==3U && j==2U ? 2000U : bad[j]);
+            if ((i==2U && (v==99U)) || (i==3U && v<2000U)) continue;
+            m.payload[34U+2U*i]=(uint8_t)v; m.payload[35U+2U*i]=(uint8_t)(v>>8U);
+            assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+        }
+        m.payload[34U+2U*i]=(uint8_t)values[i]; m.payload[35U+2U*i]=(uint8_t)(values[i]>>8U);
+    }
+    memset(m.payload+34U,255U,8U); assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_OK);
+}
+
+static void test_web_wire(void)
+{
+    LoRaMessage m,d;uint8_t frame[141];uint16_t size;uint8_t op;
+    for(op=0x10U;op<=0x11U;op++)
+    {
+        memset(&m,0,sizeof(m));m.version=4U;m.type=WEB_REQUEST;m.source_role=3U;m.source_group=1U;m.destination_role=2U;m.destination_group=1U;m.flow_id=9U;m.payload_length=11U;m.payload[0]=op;m.payload[1]=4U;m.payload[2]=1U;memset(m.payload+3,42U,8U);
+        assert(LoRaProtocol_Encode(&m,frame,sizeof(frame),&size)==LORA_PROTOCOL_OK&&size==24U);assert(LoRaProtocol_Decode(frame,size,&d)==LORA_PROTOCOL_OK);
+        frame[15]^=1U;assert(LoRaProtocol_Decode(frame,size,&d)==LORA_PROTOCOL_CRC_MISMATCH);
+        m.payload[1]=5U;assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);m.payload[1]=1U;m.payload[2]=op==0x10U?101U:2U;assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+        m.payload[2]=0U;m.destination_role=1U;m.destination_group=0U;assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_DIRECTION);
+    }
+    memset(&m,0,sizeof(m));m.version=4U;m.type=WEB_RESULT;m.source_role=2U;m.source_group=1U;m.destination_role=3U;m.destination_group=1U;m.payload_length=9U;
+    assert(LoRaProtocol_Encode(&m,frame,sizeof(frame),&size)==LORA_PROTOCOL_OK&&size==22U);
+    m.payload[8]=4U;assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+}
 int main(void)
 {
+    test_web_wire();
+    test_ultrasonic_layout_bounds_and_crc();
+    test_master_status_shape_crc_and_stream();
     test_mq2_fields_bounds_crc_and_stream();
     test_known_layouts();
     test_encode_decode_and_stream();
@@ -344,6 +420,6 @@ int main(void)
     test_local_queue_lifetime();
     test_window_shape_directions_and_ack();
     test_window_wire_crc_stream_and_queue();
-    puts("7 master protocol/parser/MQ2/queue/window groups passed (1536 layouts, 6 rain cases, 65536 window payloads)");
+    puts("10 master protocol/parser/MQ2/ultrasonic/queue/window/status groups passed (1536 layouts, 6 rain cases, 65536 window payloads)");
     return 0;
 }

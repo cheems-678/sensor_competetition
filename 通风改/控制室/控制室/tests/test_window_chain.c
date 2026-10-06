@@ -1,3 +1,4 @@
+#include "slave_web_control.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,11 +10,14 @@
 #include "master_queues.h"
 #include "master_bme280.h"
 #include "master_rain.h"
+#include "master_light_control.h"
 #include "slave_protocol_runtime.h"
 #include "slave_bme280.h"
 #include "slave_acoustic.h"
 #include "slave_mq2.h"
+#include "slave_hcsr04.h"
 #include "slave_servo_test.h"
+#include "slave_master_status.h"
 #include "sg90_test_pwm.h"
 
 #define CHECK(condition) do { checks++; assert(condition); } while (0)
@@ -25,8 +29,19 @@ static uint8_t slave_online, lose_ack, pwm_ok, hold_master_tx;
 static uint8_t master_rain_state;
 static LoRaMessage last_pc;
 volatile MasterBme280Diagnostics MasterBme280Diag;
+volatile MasterLightDiagnostics MasterLightDiag;
+uint8_t FanPwm_GetDuty(uint8_t channel) { return (uint8_t)((channel-1U)*25U); }
+static uint8_t send_status,lose_web_result;
+static unsigned web_fan_count;
 volatile SlaveBme280Diagnostics SlaveBme280Diag;
 volatile SlaveMq2Diagnostics SlaveMq2Diag;
+volatile SlaveHcsr04Diagnostics SlaveHcsr04Diag;
+static SlaveHcsr04Sample ultrasonic_sample;
+uint8_t SlaveHcsr04_GetSample(uint32_t now, SlaveHcsr04Sample *sample)
+{
+    if (!SlaveHcsr04Diag.valid || (uint32_t)(now - ultrasonic_sample.tick) >= 2000U) { return 0U; }
+    *sample = ultrasonic_sample; return 1U;
+}
 static uint8_t mq2_valid;
 static uint32_t mq2_tick;
 uint8_t SlaveMq2_GetSample(uint32_t now, SlaveMq2Sample *sample)
@@ -45,7 +60,7 @@ void MasterRain_Init(uint32_t now)
 void MasterRain_Process(uint32_t now) { (void)now; }
 uint8_t MasterRain_GetState(uint32_t now) { (void)now; return master_rain_state; }
 uint8_t FanPwm_SetDuty(uint8_t channel, uint8_t duty)
-{ return ((channel == 1U || channel == 2U) && duty <= 100U) ? 1U : 0U; }
+{web_fan_count++; return (channel >=1U && channel<=4U && duty<=100U)?1U:0U;}
 void MasterBme280_Init(uint32_t now)
 { memset((void *)&MasterBme280Diag, 0, sizeof(MasterBme280Diag)); MasterBme280Diag.sample_tick = now; }
 void MasterBme280_Process(uint32_t now) { MasterBme280Diag.sample_tick = now; }
@@ -113,7 +128,7 @@ uint8_t LORA_SendData(const uint8_t *frame, uint16_t length)
     CHECK(LoRaProtocol_Decode(frame, length, &message) == LORA_PROTOCOL_OK);
     CHECK(message.source_role == LORA_ROLE_SLAVE && message.destination_role == LORA_ROLE_MASTER);
     CHECK(message.source_group == 1U && message.destination_group == 1U);
-    CHECK(message.flow_id == last_slave_flow);
+    if(message.type!=WEB_REQUEST){CHECK(message.flow_id == last_slave_flow);}
     if (message.type == LORA_MSG_TELEMETRY)
     { CHECK(message.payload[17] == 0xFFU); } /* Rain belongs to the master. */
     if (lose_ack && message.type == LORA_MSG_ACK) { return 1U; }
@@ -138,7 +153,7 @@ static void master_transmit(void)
     if (hold_master_tx) { return; }
     while (MasterRuntime_CanTransmit() && MasterQueues_ReceiveLoRa(&message))
     {
-        if (message.destination_role == LORA_ROLE_SLAVE &&
+        if (message.destination_role == LORA_ROLE_SLAVE && (message.type==LORA_MSG_SET_WINDOW||message.type==LORA_MSG_READ_TELEMETRY) &&
             !MasterRuntime_IsSlaveRequestCurrent(message.type, message.flow_id))
         { stale_drops++; continue; }
         CHECK(LoRaProtocol_Encode(&message, frame, sizeof(frame), &length) == LORA_PROTOCOL_OK);
@@ -147,12 +162,22 @@ static void master_transmit(void)
             CHECK(message.source_role == LORA_ROLE_MASTER);
             CHECK(message.source_group == 1U && message.destination_group == 1U);
             master_downlinks++; last_slave_flow = message.flow_id;
-            if (slave_online)
+            if (slave_online && !(lose_web_result&&message.type==WEB_RESULT))
             { for (i = 0U; i < length; i++) { SlaveRuntime_PushRxByteFromIsr(frame[i]); } }
-            MasterRuntime_NotifySlaveRequestSent(message.flow_id, tick);
+            if(message.type==WEB_RESULT){for(i=0U;i<length;i++)GatewayRuntime_PushLoRaByteFromIsr(frame[i]);}
+            else MasterRuntime_NotifySlaveRequestSent(message.flow_id, tick);
         }
         else
         { for (i = 0U; i < length; i++) { GatewayRuntime_PushLoRaByteFromIsr(frame[i]); } }
+    }
+    if (send_status && MasterRuntime_PrepareStatus(&message, tick))
+    {
+        CHECK(LoRaProtocol_Encode(&message, frame, sizeof(frame), &length) == LORA_PROTOCOL_OK);
+        for (i = 0U; i < length; i++)
+        {
+            if (slave_online) { SlaveRuntime_PushRxByteFromIsr(frame[i]); }
+            GatewayRuntime_PushLoRaByteFromIsr(frame[i]); /* shared radio, ignored by gateway */
+        }
     }
 }
 static void pump(void)
@@ -168,7 +193,10 @@ static void advance(unsigned milliseconds)
 static void reset(uint32_t start)
 {
     tick = start;
+    lose_web_result=0U;web_fan_count=0U;
+    send_status = 0U; memset((void *)&MasterLightDiag, 0, sizeof(MasterLightDiag));
     mq2_valid = 0U; mq2_tick = start;
+    memset((void *)&SlaveHcsr04Diag, 0, sizeof(SlaveHcsr04Diag));
     memset((void *)&SlaveMq2Diag, 0, sizeof(SlaveMq2Diag));
     pc_count = gateway_downlinks = master_downlinks = stale_drops = 0U;
     pwm_starts = pwm_updates = pwm_stops = 0U;
@@ -211,7 +239,7 @@ static uint32_t read_u32(const uint8_t *data)
 static void check_telemetry(uint16_t flow)
 {
     CHECK(last_pc.type == LORA_MSG_TELEMETRY && last_pc.flow_id == flow);
-    CHECK(last_pc.payload_length == 34U && last_pc.payload[0] == 0x1FU);
+    CHECK(last_pc.payload_length == 42U && last_pc.payload[0] == 0x3FU);
     CHECK(last_pc.payload[1] == 201U && last_pc.payload[2] == 0U);
     CHECK(read_u32(&last_pc.payload[5]) == 101101U);
     CHECK(last_pc.payload[9] == 123U && last_pc.payload[10] == 0U);
@@ -302,8 +330,8 @@ static void rain_telemetry_chain(void)
             command(LORA_MSG_READ_TELEMETRY, flow, 0U);
             advance(online ? 50U : 500U);
             CHECK(pc_count == 1U && last_pc.type == LORA_MSG_TELEMETRY);
-            CHECK(last_pc.flow_id == flow && last_pc.payload_length == 34U);
-            CHECK(last_pc.payload[0] == (online ? 0x1FU : 0x1BU));
+            CHECK(last_pc.flow_id == flow && last_pc.payload_length == 42U);
+            CHECK(last_pc.payload[0] == (online ? 0x3FU : 0x3BU));
             CHECK(last_pc.payload[17] == rain);
             CHECK(last_pc.payload[1] == 201U && last_pc.payload[2] == 0U);
             CHECK(read_u32(&last_pc.payload[5]) == 101101U);
@@ -421,7 +449,7 @@ static void mq2_chain(void)
     age = (uint16_t)(last_pc.payload[32] | ((uint16_t)last_pc.payload[33] << 8U));
     CHECK(age == 50U);
     advance(1950U); command(LORA_MSG_READ_TELEMETRY, 901U, 0U); advance(50U);
-    CHECK(last_pc.flow_id == 901U && last_pc.payload[0] == 0x1FU);
+    CHECK(last_pc.flow_id == 901U && last_pc.payload[0] == 0x3FU);
     CHECK(memcmp(&last_pc.payload[26], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
     CHECK(last_pc.payload[9] == 123U); /* MQ expiry leaves BME available. */
     reset(0xFFFFFFF0U); mq2_valid = 1U; SlaveMq2Diag.valid = 1U;
@@ -430,13 +458,93 @@ static void mq2_chain(void)
     puts("PASS MQ2 real three-board encoding/forwarding, independent expiry and tick wrap");
 }
 
+static void master_status_chain(void)
+{
+    SlaveMasterStatus status;
+    unsigned initial_pc;
+    reset(0U); send_status = 1U; master_rain_state = 1U;
+    MasterLightDiag.input_valid = MasterLightDiag.output_valid = 1U;
+    MasterLightDiag.stable_dark = MasterLightDiag.light_on = 1U;
+    advance(1001U); SlaveMasterStatus_Get(tick, &status);
+    CHECK(status.online && status.bme_valid && status.temperature_x10 == 201);
+    CHECK(status.rain == 1U && status.dark == 1U && status.fan_pwm[3] == 75U);
+    CHECK(pc_count == 0U && gateway_downlinks == 0U && SlaveRuntimeDiag.request_count == 0U);
+    command(LORA_MSG_SET_WINDOW, 400U, 1U); advance(50U);
+    CHECK(last_pc.type == LORA_MSG_ACK && last_pc.flow_id == 400U);
+    advance(300U); CHECK(pwm_pulse == 1500U);
+    master_rain_state = 0xFFU;
+    command(LORA_MSG_READ_TELEMETRY, 401U, 0U); advance(50U); check_telemetry(401U);
+    initial_pc = pc_count;
+    advance(300000U); CHECK(pc_count == initial_pc);
+    SlaveMasterStatus_Get(tick, &status); CHECK(status.online && status.bme_valid);
+    send_status = 0U; advance(3000U); SlaveMasterStatus_Get(tick, &status); CHECK(!status.online);
+    command(LORA_MSG_READ_TELEMETRY, 402U, 0U); advance(50U); check_telemetry(402U);
+    reset(0xFFFFFFF0U); send_status = 1U; advance(1001U);
+    SlaveMasterStatus_Get(tick, &status); CHECK(status.online && status.bme_valid);
+    puts("PASS autonomous master status three-board chain, gateway isolation, control and expiry");
+}
+
+static void ultrasonic_chain(void)
+{
+    reset(100U); SlaveHcsr04Diag.valid=1U;
+    ultrasonic_sample.tick=tick; ultrasonic_sample.distance_mm=250U;
+    ultrasonic_sample.raw_mm=252U; ultrasonic_sample.pulse_us=1469U;
+    command(LORA_MSG_READ_TELEMETRY,980U,0U); advance(50U);
+    check_telemetry(980U);
+    CHECK(last_pc.payload[34]==250U && last_pc.payload[36]==252U);
+    CHECK((last_pc.payload[38]|((uint16_t)last_pc.payload[39]<<8U))==1469U);
+    CHECK(last_pc.payload[40]==50U && last_pc.payload[41]==0U);
+    advance(1950U); command(LORA_MSG_READ_TELEMETRY,981U,0U); advance(50U);
+    CHECK(memcmp(last_pc.payload+34U,"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",8U)==0);
+    CHECK(last_pc.payload[9]==123U);
+    SlaveHcsr04Diag.valid=1U; ultrasonic_sample.tick=tick;
+    command(LORA_MSG_READ_TELEMETRY,982U,0U); advance(50U);
+    CHECK(last_pc.payload[34]==250U);
+    SlaveHcsr04Diag.valid=0U; command(LORA_MSG_READ_TELEMETRY,983U,0U); advance(50U);
+    CHECK(last_pc.payload[34]==255U && last_pc.payload[35]==255U);
+    reset(0xFFFFFFF0U); SlaveHcsr04Diag.valid=1U; ultrasonic_sample.tick=tick;
+    command(LORA_MSG_READ_TELEMETRY,984U,0U); advance(50U);
+    CHECK(last_pc.payload[40]==50U && last_pc.payload[34]==250U);
+    puts("PASS ultrasonic real three-board measurements/fault/expiry/recovery/wrap");
+}
+
+static void web_chain(void)
+{
+    uint8_t p[11]={0x10U,1U,75U,1,2,3,4,5,6,7,8},state;unsigned i,count;
+    reset(0U);send_status=1U;advance(1001U);
+    for(i=1U;i<=4U;i++)
+    {
+        p[1]=(uint8_t)i;p[3]=(uint8_t)i;CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(100U);
+        CHECK(SlaveWebControl_Status(p+3,tick)==WEB_OK);CHECK(web_fan_count==i);CHECK(pc_count==0U);
+        CHECK(SlaveWebControl_Submit(p,tick,&state)==200U);advance(100U);CHECK(web_fan_count==i);
+    }
+    for(i=1U;i<=4U;i++)
+    {
+        p[0]=0x11U;p[1]=(uint8_t)i;p[2]=1U;p[3]=(uint8_t)(i+10U);
+        CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(160U);
+        CHECK(SlaveWebControl_Status(p+3,tick)==WEB_OK);CHECK(pc_count==0U);advance(300U);
+        CHECK(i==1U?pwm_pulse==1500U:extra_pulses[i-2U]==1500U);
+    }
+    count=pc_count;p[3]=25U;lose_web_result=1U;CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(8000U);
+    CHECK(SlaveWebControl_Status(p+3,tick)==WEB_UNKNOWN);CHECK(pc_count==count);lose_web_result=0U;
+    p[3]=26U;lose_ack=1U;CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(700U);CHECK(SlaveWebControl_Status(p+3,tick)==WEB_UNKNOWN);lose_ack=0U;
+    p[3]=27U;lose_ack=1U;command(LORA_MSG_SET_WINDOW,99U,0U);CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(650U);lose_ack=0U;
+    CHECK(SlaveWebControl_Status(p+3,tick)==WEB_BUSY);check_ack(99U,WEB_UNKNOWN);
+    p[3]=28U;CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);for(i=0U;i<100U&&MasterRuntime_CanTransmit();i++)advance(1U);CHECK(!MasterRuntime_CanTransmit());command(LORA_MSG_SET_WINDOW,1U,1U);advance(160U);check_ack(1U,WEB_BUSY);
+    advance(200U);CHECK(SlaveWebControl_Status(p+3,tick)==WEB_OK);
+    advance(300000U);CHECK(web_fan_count==4U);
+    puts("PASS web three-board: four fans/windows, duplicates, gateway isolation, busy, lost ACK/result and 5-minute monitoring");
+}
 int main(void)
 {
+    web_chain();
+    ultrasonic_chain();
+    master_status_chain();
     mq2_chain();
     four_channel_chain();
     normal_chain(); same_direction_repeat(); reverse_restarts_timer();
     telemetry_isolation(); rain_telemetry_chain(); unknown_results(); driver_failure();
     stop_driver_failure(); stale_queue(); tick_wrap();
-    printf("window/MQ2 chain: 12 groups, %u checks, 0 failures\n", checks);
+    printf("window/MQ2/ultrasonic/status chain: 15 groups, %u checks, 0 failures\n", checks);
     return 0;
 }

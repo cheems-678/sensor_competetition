@@ -61,7 +61,9 @@ class PackagingCheck:
                                    "port": snapshot["port"], "connected": snapshot["connected"],
                                    "telemetry": snapshot["telemetry"]})
                 if not check.sample or (snapshot["telemetry"]["sounds"]["sound_rms_1"] == "0"
-                                        and snapshot["telemetry"]["mq2"]["valid"]):
+                                        and snapshot["telemetry"]["mq2"]["valid"]
+                                        and snapshot["telemetry"]["ultrasonic"]["valid"]
+                                        and snapshot["telemetry"]["ultrasonic"]["distance_mm"] == 250):
                     check.ready.set()
                 return snapshot
 
