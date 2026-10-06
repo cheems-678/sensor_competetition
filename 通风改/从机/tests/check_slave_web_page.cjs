@@ -58,8 +58,14 @@ async function check() {
         });
         if(url.startsWith('/api/control')){
           controlCalls.push({url,options});
-          if(options.method==='POST'){const body=JSON.parse(options.body);assert(options.body.length<=96);assert.match(body.request_id,/^[a-f0-9]{16}$/);controlId=body.request_id;return {ok:true,json:async()=>({request_id:controlId,state:'queued'})};}
-          return {ok:true,json:async()=>({request_id:controlId,state:controlMode})};
+          if(options.method==='POST'){
+            const body=JSON.parse(options.body);assert(options.body.length<=96);assert.match(body.request_id,/^[a-f0-9]{16}$/);controlId=body.request_id;
+            if(controlMode==='http_error')return {ok:false,status:400,json:async()=>({request_id:null,state:'failed',phase:'rejected',reason:'invalid_request'})};
+            if(controlMode==='plain_error')return {ok:false,status:400,json:async()=>{throw new Error('plain error body')}};
+            if(controlMode==='id_error')return {ok:true,status:202,json:async()=>({request_id:'0000000000000000',state:'queued'})};
+            return {ok:true,status:202,json:async()=>({request_id:controlId,state:'queued',phase:'radio_queued',reason:'none'})};
+          }
+          return {ok:true,status:200,json:async()=>({request_id:controlId,state:controlMode,phase:controlMode==='waiting'?'awaiting_result':'finished',reason:controlMode==='failed'?'device_rejected':'none'})};
         }
         clock += httpDelay;
         return {ok: true, json: async () => current};
@@ -82,7 +88,7 @@ async function check() {
   assert.equal(get('mq2').textContent, '3.301');
   assert.equal(get('fan1').textContent, '0'); assert.equal(get('fan3').textContent, '--');
   assert.equal(get('window1').textContent, '停止'); assert.equal(get('window2').textContent, '动作中');
-  assert.equal(get('window3').textContent, '故障'); assert.equal(get('window4').textContent, '未启动');
+  assert.equal(get('window3').textContent, '故障 · PWM更新失败'); assert.equal(get('window4').textContent, '未启动');
   const sameWrites = {...writes}; await poll();
   for (const id of ['masterTemperature','masterStatus','masterStatusClass','slaveStatus','slaveStatusClass','temperature','humidity','mq2','status','statusClass','window2'])
     assert.equal(writes[id], sameWrites[id], id + ' is not rewritten for identical data');
@@ -210,16 +216,26 @@ async function check() {
   assert.equal(controlCalls.length,1);assert.equal(JSON.parse(controlCalls[0].options.body).channel,4);
   vm.runInContext("submitCommand('window',1,1)",context);assert.equal(vm.runInContext('commandDraft',context),null);
   step(1000);fresh();await poll();assert.equal(controlCalls.length,2);assert.match(get('fanResult4').textContent,/已确认/);
-  controlMode='busy';vm.runInContext("submitCommand('window',2,1)",context);await poll();step(1000);fresh();await poll();assert.match(get('windowResult2').textContent,/忙碌/);
+  controlMode='busy';vm.runInContext("submitCommand('window',2,1)",context);await poll();step(1000);fresh();await poll();assert.match(get('windowResult2').textContent,/忙/);
   controlMode='waiting';vm.runInContext("submitCommand('window',4,0)",context);await poll();const calls=controlCalls.length;step(8000);fresh();await poll();
-  assert.match(get('windowResult4').textContent,/结果未知/);assert.equal(controlCalls.length,calls,'timeout is not retried');
+  assert.match(get('windowResult4').textContent,/等待设备结果超时.*结果未知/);assert.equal(controlCalls.length,calls,'timeout is not retried');
   for(const page of ['overview','environment','distance','rain','smoke','fans','windows','logs'])vm.runInContext('switchPage("'+page+'")',context);
   assert.equal(controlCalls.length,calls,'navigation does not control devices');
   fresh();await poll();controlMode='success';const beforeKeys=controlCalls.length;
   get('fanRange1').handlers.keydown({key:'ArrowRight'});get('fanRange1').value='45';get('fanRange1').handlers.change();assert.equal(vm.runInContext('commandDraft',context),null,'range keydown cannot submit');
   get('fanRange1').handlers.keyup({key:'ArrowRight'});assert.equal(controlCalls.length,beforeKeys);await poll();step(1000);fresh();await poll();assert.match(get('fanResult1').textContent,/已确认/);
   get('fanInput1').value='';get('fanSend1').handlers.click();assert.equal(vm.runInContext('commandDraft',context),null,'blank numeric input does not stop a fan');
-  vm.runInContext("submitCommand('fan',1,10)",context);step(1001);fresh();await poll();assert.match(get('fanResult1').textContent,/结果未知/);assert.equal(controlCalls.length,beforeKeys+2,'expired browser draft is never sent');
+  vm.runInContext("submitCommand('fan',1,10)",context);step(1001);fresh();await poll();assert.match(get('fanResult1').textContent,/未发送/);assert.equal(controlCalls.length,beforeKeys+2,'expired browser draft is never sent');
+  for(const error of ['http_error','plain_error','id_error']){
+    fresh();await poll();controlMode=error;const count=controlCalls.length;
+    vm.runInContext("submitCommand('fan',2,75)",context);await poll();
+    assert.match(get('fanResult2').textContent,error==='id_error'?/编号不匹配/:/HTTP 400/);
+    assert(!get('fanResult2').textContent.includes('已确认'));step(1000);fresh();await poll();
+    assert.equal(controlCalls.length,count+1,'failed HTTP submission is never retried or polled');
+  }
+  fresh();await poll();controlMode='failed';vm.runInContext("submitCommand('window',3,1)",context);await poll();
+  assert.match(get('windowResult3').textContent,/等待无线发送/);step(1000);fresh();await poll();
+  assert.match(get('windowResult3').textContent,/设备拒绝/);assert(get('logs').textContent.includes('device_rejected'));
   vm.runInContext("for(let i=0;i<1300;i++)record('master',10000+i,{temperature:i,humidity:50,pressure:100000})",context);
   assert.equal(vm.runInContext('trend.length',context),1200);step(600001);vm.runInContext('pruneTrend()',context);assert.equal(vm.runInContext('trend.filter(p=>p.value).length',context),0);
   vm.runInContext("switchPage('overview')",context);const zoom=vm.runInContext('modelView.zoom',context);get('zoomIn').handlers.click();assert(vm.runInContext('modelView.zoom',context)>zoom);get('resetModel').handlers.click();assert.equal(vm.runInContext('modelView.zoom',context),1);
