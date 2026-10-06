@@ -200,14 +200,9 @@ static void RememberWeb(const uint8_t *p,uint8_t state,uint32_t now)
     r=g_web_cache+g_web_next;g_web_next=(uint8_t)((g_web_next+1U)%4U);
     memcpy(r->id,p+3,8U);r->command=p[0];r->channel=p[1];r->value=p[2];r->state=state;r->tick=now;
 }
-static uint8_t MasterRuntime_QueueWindowAck(uint16_t flow_id, uint8_t status, uint8_t web_origin)
+static uint8_t MasterRuntime_QueueWindowAck(uint16_t flow_id, uint8_t status)
 {
     LoRaMessage outbound;
-    if(web_origin)
-    {
-        uint8_t p[11];p[0]=0x11U;p[1]=g_pending.window_servo_id;p[2]=g_pending.window_action;memcpy(p+3,g_pending.web_id,8U);
-        RememberWeb(p,status,HAL_GetTick());return QueueWebResult(flow_id,g_pending.web_id,status);
-    }
 
     MasterRuntime_SetAddress(&outbound, LORA_MSG_ACK,
                              LORA_ROLE_CONTROL_ROOM, 0U, flow_id);
@@ -220,6 +215,27 @@ static uint8_t MasterRuntime_QueueWindowAck(uint16_t flow_id, uint8_t status, ui
     }
     MasterRuntimeDiag.window_reply_count++;
     return 1U;
+}
+static uint8_t MasterRuntime_QueueWindowResult(uint32_t now_ms)
+{
+    uint8_t p[WEB_REQUEST_SIZE];
+    if(!g_pending.web_origin)
+        return MasterRuntime_QueueWindowAck(g_pending.flow_id,g_pending.window_status);
+    p[0]=LORA_MSG_SET_WINDOW;p[1]=g_pending.window_servo_id;p[2]=g_pending.window_action;
+    memcpy(p+3,g_pending.web_id,8U);
+    RememberWeb(p,g_pending.window_status,now_ms);
+    return QueueWebResult(g_pending.flow_id,g_pending.web_id,g_pending.window_status);
+}
+/* Scalar transaction setup is shared by both command origins. No message copies
+ * or response builders may be nested through this function. */
+static void MasterRuntime_StartWindow(uint16_t flow,uint8_t servo_id,
+                                      uint8_t action,uint32_t now_ms)
+{
+    memset(&g_pending,0,sizeof(g_pending));
+    g_pending.active=1U;g_pending.request_type=LORA_MSG_SET_WINDOW;
+    g_pending.flow_id=flow;g_pending.slave_flow_id=++g_slave_flow;
+    g_pending.slave_start_tick=now_ms;g_pending.window_servo_id=servo_id;
+    g_pending.window_action=action;g_pending.window_status=LORA_WINDOW_STATUS_TIMEOUT;
 }
 
 static void MasterRuntime_HandleControl(const LoRaMessage *message,
@@ -269,18 +285,11 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         {
             MasterRuntimeDiag.window_busy_count++;
             (void)MasterRuntime_QueueWindowAck(message->flow_id,
-                                              LORA_WINDOW_STATUS_BUSY,0U);
+                                              LORA_WINDOW_STATUS_BUSY);
             return;
         }
-        memset(&g_pending, 0, sizeof(g_pending));
-        g_pending.active = 1U;
-        g_pending.request_type = LORA_MSG_SET_WINDOW;
-        g_pending.flow_id = message->flow_id;
-        g_pending.slave_flow_id = ++g_slave_flow;
-        g_pending.slave_start_tick = now_ms;
-        g_pending.window_servo_id = message->payload[0];
-        g_pending.window_action = message->payload[1];
-        g_pending.window_status = LORA_WINDOW_STATUS_TIMEOUT;
+        MasterRuntime_StartWindow(message->flow_id,message->payload[0],
+                                  message->payload[1],now_ms);
         /* Opening (action=1) must not trigger a forced BME conversion. */
         return;
     }
@@ -302,9 +311,25 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
     }
 }
 
+static void ExecuteWeb(const uint8_t *p,uint16_t flow,uint32_t now)
+{
+    uint8_t state;
+    if(p[0]==LORA_MSG_SET_FAN_SPEED)
+    {
+        state=FanPwm_SetDuty(p[1],p[2])?WEB_OK:WEB_FAILED;
+        if(state==WEB_OK)MasterRuntimeDiag.web_applied++;else MasterRuntimeDiag.web_failed++;
+        RememberWeb(p,state,now);(void)QueueWebResult(flow,p+3,state);
+    }
+    else
+    {
+        MasterRuntimeDiag.window_command_count++;
+        MasterRuntime_StartWindow(flow,p[1],p[2],now);
+        g_pending.web_origin=1U;memcpy(g_pending.web_id,p+3,8U);
+    }
+}
 static void HandleWeb(const LoRaMessage *m,uint32_t now,uint32_t received)
 {
-    const uint8_t *p=m->payload;WebRecord *cached;uint8_t state;LoRaMessage cmd;
+    const uint8_t *p=m->payload;WebRecord *cached;uint8_t state;
     if(!Web_Valid(p,m->payload_length))return;
     cached=Web_Find(g_web_cache,p+3,now);
     if(cached){(void)QueueWebResult(m->flow_id,p+3,Web_Same(cached,p)?cached->state:WEB_FAILED);return;}
@@ -324,21 +349,14 @@ static void HandleWeb(const LoRaMessage *m,uint32_t now,uint32_t received)
         g_web_wait.received_tick=received;g_web_wait.active=1U;MasterRuntimeDiag.web_deferred++;return;
     }
     else if(g_pending.active)state=WEB_BUSY;
-    else if(p[0]==0x10U)
-    {
-        state=FanPwm_SetDuty(p[1],p[2])?WEB_OK:WEB_FAILED;
-        if(state==WEB_OK)MasterRuntimeDiag.web_applied++;else MasterRuntimeDiag.web_failed++;
-    }
     else
     {
-        cmd=*m;cmd.type=0x11U;cmd.payload_length=2U;cmd.payload[0]=p[1];cmd.payload[1]=p[2];
-        MasterRuntime_HandleControl(&cmd,now);g_pending.web_origin=1U;memcpy(g_pending.web_id,p+3,8U);return;
+        ExecuteWeb(p,m->flow_id,now);return;
     }
     RememberWeb(p,state,now);(void)QueueWebResult(m->flow_id,p+3,state);
 }
 static void ProcessWaitingWeb(uint32_t now)
 {
-    LoRaMessage m;
     if(!g_web_wait.active)return;
     if((uint32_t)(now-g_web_wait.received_tick)>=WEB_TELEMETRY_WAIT_MS)
     {
@@ -348,13 +366,8 @@ static void ProcessWaitingWeb(uint32_t now)
         g_web_wait.active=0U;return;
     }
     if(g_pending.active)return;
-    memset(&m,0,sizeof(m));m.version=LORA_PROTOCOL_VERSION;m.type=WEB_REQUEST;
-    m.source_role=LORA_ROLE_SLAVE;m.destination_role=LORA_ROLE_MASTER;
-    m.source_group=m.destination_group=LORA_PROTOCOL_SINGLE_GROUP;m.flow_id=g_web_wait.flow;
-    m.payload_length=WEB_REQUEST_SIZE;memcpy(m.payload,g_web_wait.payload,WEB_REQUEST_SIZE);
     g_web_wait.active=0U;
-    /* The original deadline was checked above; this is execution, not new admission. */
-    HandleWeb(&m,now,now);
+    ExecuteWeb(g_web_wait.payload,g_web_wait.flow,now);
 }
 static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
                                       uint32_t now_ms, uint32_t received_tick)
@@ -517,8 +530,7 @@ void MasterRuntime_ProcessOne(uint32_t now_ms)
         if ((g_pending.slave_state == 3U) &&
             (g_pending.request_type == LORA_MSG_SET_WINDOW))
         {
-            if (MasterRuntime_QueueWindowAck(g_pending.flow_id,
-                                             g_pending.window_status,g_pending.web_origin) != 0U)
+            if (MasterRuntime_QueueWindowResult(now_ms) != 0U)
             { g_pending.active = 0U; }
         }
         else if ((g_pending.slave_state == 3U) &&

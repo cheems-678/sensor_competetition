@@ -2,7 +2,12 @@
 
 ## 热点控制台改版（2026-10-06）
 
+- 通信回归实板审计：原探针SN `37FF71064E573436B2BA1E43`及从机绑定UID已核对，Flash55392个已编程字节匹配当前reliable从机HEX。未暂停/复位，最终CPU Running；本地BME持续采样，SlaveRuntimeDiag有130个被忽略的无线帧，主机状态接受/主机遥测请求均0，控制提交计数0。用户确认的另一块主机实际也烧有同一从机映像，因此不能形成主机广播/控制室回复。保持当前正确从机固件，不用再次重烧从机来修复此次角色问题。
 - 真实控制优化遵循共同协议新增约定：仍沿用slave_esp_web.*、slave_web_control.*和HTML/生成头；控制JSON附加phase/reason、错误请求返回JSON、流式跳过无关长请求头不增大行缓冲。来源和关键字段不放宽；诊断只加有限计数与5个本地原因字节，不加动态内存。测试沿既有tests，留档沿MDK输出目录，旧固件保留；配套主从机由用户烧录。
+- 当前交付优先于下方旧控制台留档：`MDK-ARM/LoraSlaveV1.0/LoraSlaveV1_slave_web_control_reliable_20261006.hex`，配套同名前缀ELF/map，SHA256 `9BC195CCD2173C8AD18E67A6E01019BDDA5D7C91A002AE174E4FE3AB4618143F`。Keil 0错误/0警告：Code37040/RO18340/RW320/ZI19488，Flash55700/RAM19808（含1024栈），静态RAM余672字节；已知栈464字节另有未知间接调用，不能代替实板测量。压缩页15660字节、HTML50912字节，HEX核对完全一致；旧固件保留。
+- HTTP拒绝返回rejected/invalid_request（未解析编号null）；已受理查询radio_queued/awaiting_result，最终成功必须等待主机21结果。HTTP与设备结果早晚交错时，state/phase/reason同时取当前记录，不混用早期受理状态。窗口当前诊断显示PWM启动/更新/配置错误；失败日志记录请求编号和阶段，但21没有具体失败原因，不能据此断言是电源或某个驱动故障。
+- `SlaveWebControlDiag`可只读检查submitted/sent/received/queue_timeout/tx_failed/result_timeout/unmatched，RAM地址须来自匹配实板固件的ELF/map。本次embedded-debugger-mcp 0.3.0 doctor/probes和ST官方CLI均未发现探针，未读取芯片或外设，现场失败仍待验收。
+- 烧录配套主从机后完全断电重启，连接既有热点，打开192.168.4.1并Ctrl+F5。先空载分别检查四风机0/25/50/100和四窗口开/关300 ms回停止，再同时开启控制室遥测验证等待行为。只有“PWM设置已确认”代表设备确认；若提示设备拒绝，保留操作记录及对应窗口当前错误，继续按绑定规则做只读实板诊断。
 - 用户批准八页深蓝控制台、Canvas旋转粮仓示意、网页四风机/四窗口控制。沿用HTML源/生成头和现有ESP服务；生成器内置gzip，页面响应Content-Encoding:gzip，JSON保持原格式。模型不推算粮位/吨位/内部温度。
 - 共用 `../../web_control_wire.h` 放12请求/21结果线格式与去重记录；新增 `slave_web_control.*` 只管理单一网页请求、最近4条30秒结果和1秒排队/8秒总体超时，协议runtime负责真实UART发送与结果接收。HTTP复用Connection.line解析<=96字节同源JSON，不新增大缓冲区；POST /api/control受理，GET /api/control?id查询，不在GET执行动作。所有动作经过主机，忙时拒绝，不自动重试或补发。
 - 网页沿用来源时效、防闪动及测距故障立即失效；浏览器历史10分钟最多1200观测，切页继续采集，操作日志限200条。新增测试放现有tests；产物仍放tests/build和MDK既有输出目录，不删除或覆盖历史留档。主从机配套构建后用户手动烧录，不自动操作实板。

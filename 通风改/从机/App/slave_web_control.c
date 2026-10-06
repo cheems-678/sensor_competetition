@@ -39,7 +39,7 @@ void SlaveWebControl_Accept(uint16_t flow,const uint8_t *p,uint8_t size,uint32_t
 {
     uint8_t reason;
     SlaveWebControl_Process(now);
-    if(!g_active.command||g_active.state!=WEB_WAITING||flow!=g_flow||size!=WEB_RESULT_SIZE||p[8]>WEB_BUSY||memcmp(p,g_active.id,8U))
+    if(!g_active.command||g_active.state!=WEB_WAITING||flow!=g_flow||!p||size!=WEB_RESULT_SIZE||p[8]>WEB_BUSY||memcmp(p,g_active.id,8U))
     {SlaveWebControlDiag.unmatched++;return;}
     reason=(p[8]==WEB_OK)?WEB_REASON_NONE:(p[8]==WEB_FAILED)?WEB_REASON_REJECTED:(p[8]==WEB_BUSY)?WEB_REASON_MASTER_BUSY:WEB_REASON_REMOTE_UNKNOWN;
     SlaveWebControlDiag.received++;Finish(p[8],reason,now);

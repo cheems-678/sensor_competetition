@@ -985,6 +985,6 @@ int main(void)
     test_window_final_ack_queue_failure_keeps_result();
     test_window_then_forced_telemetry_is_independent();
     test_window_slave_flow_wrap_and_malformed_request();
-    puts("25 master BME/runtime/MQ2/ultrasonic/window/rain/status test groups passed (including four fans, audio and 5-minute virtual run)");
+    puts("26 master BME/runtime/MQ2/ultrasonic/window/rain/status test groups passed (including four fans, audio and 5-minute virtual run)");
     return 0;
 }

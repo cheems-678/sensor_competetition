@@ -108,3 +108,5 @@ HC-SR04回归（在本目录执行，沿用上方MinGW PATH约定）：
 & 'D:/codeblocks/MinGW/bin/gcc.exe' -std=c99 -Wall -Wextra -Werror -I../App -I../Bsp test_slave_hcsr04.c ../App/slave_hcsr04.c -o build/test_slave_hcsr04.exe
 & './build/test_slave_hcsr04.exe'
 ```
+
+网页控制服务：在tests执行 `gcc -std=c99 -Wall -Wextra -Werror -I../App test_slave_web_control.c ../App/slave_web_control.c ../App/slave_master_status.c -o build/test_slave_web_control.exe`，随后运行程序；HTML改动先生成C头，运行ESP测试产生真实gzip/JSON夹具，再运行Node网页回归。

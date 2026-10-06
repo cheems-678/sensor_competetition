@@ -62,6 +62,7 @@ async function check() {
             const body=JSON.parse(options.body);assert(options.body.length<=96);assert.match(body.request_id,/^[a-f0-9]{16}$/);controlId=body.request_id;
             if(controlMode==='http_error')return {ok:false,status:400,json:async()=>({request_id:null,state:'failed',phase:'rejected',reason:'invalid_request'})};
             if(controlMode==='plain_error')return {ok:false,status:400,json:async()=>{throw new Error('plain error body')}};
+            if(controlMode==='bad_success')return {ok:false,status:400,json:async()=>({request_id:controlId,state:'success',reason:'none'})};
             if(controlMode==='id_error')return {ok:true,status:202,json:async()=>({request_id:'0000000000000000',state:'queued'})};
             return {ok:true,status:202,json:async()=>({request_id:controlId,state:'queued',phase:'radio_queued',reason:'none'})};
           }
@@ -226,7 +227,7 @@ async function check() {
   get('fanRange1').handlers.keyup({key:'ArrowRight'});assert.equal(controlCalls.length,beforeKeys);await poll();step(1000);fresh();await poll();assert.match(get('fanResult1').textContent,/已确认/);
   get('fanInput1').value='';get('fanSend1').handlers.click();assert.equal(vm.runInContext('commandDraft',context),null,'blank numeric input does not stop a fan');
   vm.runInContext("submitCommand('fan',1,10)",context);step(1001);fresh();await poll();assert.match(get('fanResult1').textContent,/未发送/);assert.equal(controlCalls.length,beforeKeys+2,'expired browser draft is never sent');
-  for(const error of ['http_error','plain_error','id_error']){
+  for(const error of ['http_error','plain_error','bad_success','id_error']){
     fresh();await poll();controlMode=error;const count=controlCalls.length;
     vm.runInContext("submitCommand('fan',2,75)",context);await poll();
     assert.match(get('fanResult2').textContent,error==='id_error'?/编号不匹配/:/HTTP 400/);

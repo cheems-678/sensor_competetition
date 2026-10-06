@@ -5,12 +5,13 @@ const page = require('node:zlib').gzipSync(Buffer.from(readPage()),{level:9});
 const fanDuties=[0,25,50,100],requests=new Map();
 let active=null;
 function settleControls(){if(active&&Date.now()-active.started>=500){active.state='success';if(active.type==='fan')fanDuties[active.channel-1]=active.value;active=null;}}
+function result(id,state){return {request_id:id,state,phase:state==='queued'?'radio_queued':state==='waiting'?'awaiting_result':'finished',reason:state==='busy'?'master_busy':state==='failed'?'device_rejected':state==='unknown'?'unknown_request':'none'};}
 let seq = 0;
 const started = Date.now();
 http.createServer((req, res) => {
   settleControls();
-  if(req.url==='/api/control'&&req.method==='POST'){let body='';req.on('data',b=>{body+=b;if(body.length>96)req.destroy();});req.on('end',()=>{try{const c=JSON.parse(body);if(!/^[a-f0-9]{16}$/.test(c.request_id)||!['fan','window'].includes(c.type)||!Number.isInteger(c.channel)||c.channel<1||c.channel>4||!Number.isInteger(c.value)||c.value<0||c.value>(c.type==='fan'?100:1))throw Error();let old=requests.get(c.request_id);if(!old){old={...c,state:active?'busy':'queued',started:Date.now()};requests.set(c.request_id,old);if(!active)active=old;}res.writeHead(old.state==='busy'?409:202,{'Content-Type':'application/json'});res.end(JSON.stringify({request_id:c.request_id,state:old.state}));}catch(error){res.writeHead(400);res.end('{}');}});return;}
-  if(req.url.startsWith('/api/control?id=')){const id=req.url.slice(16),c=requests.get(id);res.writeHead(c?200:404,{'Content-Type':'application/json'});res.end(JSON.stringify({request_id:id,state:c?c.state:'unknown'}));return;}
+  if(req.url==='/api/control'&&req.method==='POST'){let body='';req.on('data',b=>{body+=b;if(body.length>96)req.destroy();});req.on('end',()=>{try{const c=JSON.parse(body);if(!/^[a-f0-9]{16}$/.test(c.request_id)||!['fan','window'].includes(c.type)||!Number.isInteger(c.channel)||c.channel<1||c.channel>4||!Number.isInteger(c.value)||c.value<0||c.value>(c.type==='fan'?100:1))throw Error();let old=requests.get(c.request_id);if(!old){old={...c,state:active?'busy':'queued',started:Date.now()};requests.set(c.request_id,old);if(!active)active=old;}res.writeHead(old.state==='busy'?409:202,{'Content-Type':'application/json'});res.end(JSON.stringify(result(c.request_id,old.state)));}catch(error){res.writeHead(400);res.end('{}');}});return;}
+  if(req.url.startsWith('/api/control?id=')){const id=req.url.slice(16),c=requests.get(id);res.writeHead(c?200:404,{'Content-Type':'application/json'});res.end(JSON.stringify(result(id,c?c.state:'unknown')));return;}
   if (req.url === '/api/telemetry') {
     seq++;
     const valid = true;

@@ -509,8 +509,21 @@ static void test_browser_headers(void)
         ipd(0U,headers);finish(1U);assert(strstr(responses[0],"400 Bad Request"));assert(!SlaveWebControl_Prepare(p,&flow,now));
     }
 }
+static void test_control_result_before_http_reply(void)
+{
+    uint8_t status[26],p[11],result[9];uint16_t flow;
+    const char *body="{\"request_id\":\"0102030405060708\",\"type\":\"window\",\"channel\":1,\"value\":1}";
+    reset(0U);ready();memset(status,255,sizeof(status));status[0]=1U;status[1]=0U;status[2]=128U;
+    assert(SlaveMasterStatus_Accept(1U,status,26U,now));
+    request(0U,"/");step(3U);control_post(1U,"http://192.168.4.1",body,0U);step(1U);
+    assert(SlaveWebControl_Prepare(p,&flow,now));SlaveWebControl_Sent(1U,now);
+    memcpy(result,p+3,8U);result[8]=WEB_FAILED;SlaveWebControl_Accept(flow,result,9U,now);
+    finish(2U);assert(strstr(responses[1],"\"state\":\"failed\""));
+    assert(strstr(responses[1],"\"phase\":\"finished\""));assert(strstr(responses[1],"device_rejected"));
+}
 int main(void)
 {
+    test_control_result_before_http_reply();
     test_browser_headers();
     test_control_http();
     test_init_and_data(); test_stream_and_connections(); test_http_limits();

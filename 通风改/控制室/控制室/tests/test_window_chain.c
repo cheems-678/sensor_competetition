@@ -535,8 +535,67 @@ static void web_chain(void)
     advance(300000U);CHECK(web_fan_count==4U);
     puts("PASS web three-board: four fans/windows, duplicates, gateway isolation, busy, lost ACK/result and 5-minute monitoring");
 }
+static void web_telemetry_wait_chain(void)
+{
+    uint8_t p[11]={0x10U,1U,75U,40U,2U,3U,4U,5U,6U,7U,8U},state;
+    unsigned op,id;
+    for(op=0U;op<2U;op++)for(id=1U;id<=4U;id++)
+    {
+        reset(0U);send_status=1U;advance(1001U);hold_master_tx=1U;
+        command(LORA_MSG_READ_TELEMETRY,(uint16_t)(1000U+id),0U);
+        p[0]=op?0x11U:0x10U;p[1]=(uint8_t)id;p[2]=op?1U:75U;p[3]=(uint8_t)(40U+id);
+        CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(100U);
+        CHECK(MasterRuntimeDiag.web_deferred==1U&&web_fan_count==0U&&pwm_pulse==1500U);
+        hold_master_tx=0U;advance(200U);
+        CHECK(SlaveWebControl_Status(p+3,tick)==WEB_OK);
+        CHECK(SlaveWebControl_Reason(p+3,tick)==WEB_REASON_NONE);
+        CHECK(web_fan_count==(op?0U:1U));check_telemetry((uint16_t)(1000U+id));
+        CHECK(SlaveWebControl_Submit(p,tick,&state)==200U);advance(300U);
+        CHECK(web_fan_count==(op?0U:1U));
+        CHECK(id==1U?pwm_pulse==1500U:extra_pulses[id-2U]==1500U);
+    }
+    reset(0U);send_status=1U;advance(1001U);p[0]=0x11U;p[1]=1U;p[2]=1U;p[3]=50U;pwm_ok=0U;
+    CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(160U);
+    CHECK(SlaveWebControl_Status(p+3,tick)==WEB_FAILED);
+    CHECK(SlaveWebControl_Reason(p+3,tick)==WEB_REASON_REJECTED);
+    CHECK(SlaveServoTestDiag.last_error==SLAVE_SERVO_TEST_ERROR_UPDATE);
+    CHECK(MasterRuntimeDiag.web_failed==1U);
+    puts("PASS real web telemetry arbitration for all fans/windows, dedup and driver-rejection diagnosis");
+}
+static void continuous_pc_status_web_chain(void)
+{
+    uint8_t p[11]={0x10U,1U,75U,0U,0U,3U,4U,5U,6U,7U,8U},state;
+    SlaveMasterStatus status;unsigned round,web_count=0U;
+    reset(0U);send_status=1U;advance(1001U);
+    for(round=0U;round<300U;round++)
+    {
+        /* Real radio admission, response slots and queue ownership stay active
+         * throughout the run; do not replace telemetry with idle-only monitoring. */
+        hold_master_tx=(uint8_t)(round%8U==0U);
+        command(LORA_MSG_READ_TELEMETRY,(uint16_t)(2000U+round),0U);
+        if(hold_master_tx)
+        {
+            p[0]=(round%16U==0U)?0x10U:0x11U;p[1]=(uint8_t)((web_count%4U)+1U);
+            p[2]=(p[0]==0x10U)?75U:(uint8_t)(web_count&1U);
+            p[3]=(uint8_t)round;p[4]=(uint8_t)(round>>8U);
+            CHECK(SlaveWebControl_Submit(p,tick,&state)==202U);advance(100U);
+            hold_master_tx=0U;advance(300U);
+            CHECK(SlaveWebControl_Status(p+3,tick)==WEB_OK);web_count++;
+        }
+        else advance(400U);
+        check_telemetry((uint16_t)(2000U+round));
+        CHECK(pc_count==round+1U);
+        SlaveMasterStatus_Get(tick,&status);CHECK(status.online);
+        advance(600U);
+    }
+    CHECK(MasterRuntimeDiag.telemetry_reply_count==300U);
+    CHECK(MasterRuntimeDiag.web_deferred==web_count&&SlaveMasterStatusDiag.accepted_count>250U);
+    puts("PASS 5 minutes with 300 PC telemetry replies, continuous master broadcasts and 38 interleaved web actions");
+}
 int main(void)
 {
+    continuous_pc_status_web_chain();
+    web_telemetry_wait_chain();
     web_chain();
     ultrasonic_chain();
     master_status_chain();
@@ -545,6 +604,6 @@ int main(void)
     normal_chain(); same_direction_repeat(); reverse_restarts_timer();
     telemetry_isolation(); rain_telemetry_chain(); unknown_results(); driver_failure();
     stop_driver_failure(); stale_queue(); tick_wrap();
-    printf("window/MQ2/ultrasonic/status chain: 15 groups, %u checks, 0 failures\n", checks);
+    printf("window/MQ2/ultrasonic/status chain: 17 groups, %u checks, 0 failures\n", checks);
     return 0;
 }

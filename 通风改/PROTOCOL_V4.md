@@ -2,11 +2,13 @@
 
 本文件是控制室、主机、从机和上位机的共同约束。当前只允许固定组号 `1`。
 
+- 主机栈安全通信回归：reliable主机的Keil已知调用深度1032超过1024字节启动栈，不作为现场稳定验收版本。窗口请求采用标量事务初始化，等待槽不重构完整报文，网页結果和控制室ACK拆分；所有线格式及两秒排队规则保持。生成新的stack_safe主机固件并检查真实调用图及至少256字节中断余量，旧固件保留但不得推荐使用。
 ## 热点网页控制扩展（2026-10-06）
 
 - 真实控制优化：POST以流式丢弃过长无关请求头，不扩大128字节行缓冲；请求行及Host/Origin/Content-Type/Content-Length/Transfer-Encoding不允许截断。继续总请求<=2048、正文<=96、严格CRLF/来源/参数校验。控制接口错误也返回JSON，保留request_id/state并追加phase/reason；未解析编号为null，禁止将HTTP受理当设备执行成功。
 - 主机遥测在途时只保留一条网页命令，从接收tick起最多等2000 ms；当前遥测结束先处理网页命令，新遥测不得插队。已有控制事务不抢占，第二条不同网页命令busy；到期取消不执行并返回busy。主从机12/21载荷、窗口11/20载荷和8秒总期限保持，不自动重发。重复/参数冲突/flow匹配和4条30秒缓存保持。
 - phase为radio_queued/awaiting_result/finished/rejected；reason区分invalid_request/id_conflict/local_busy/master_offline/queue_timeout/radio_tx_failed/result_timeout/device_rejected/master_busy/remote_unknown/unknown_request，正常为none。远端21仍只有状态，device_rejected不推断成具体驱动故障；具体舵机故障结合当前通道诊断和只读探针核对。
+- 真实控制优化交付：主从机 `LoraSlaveV1_master_web_control_reliable_20261006.hex` / `LoraSlaveV1_slave_web_control_reliable_20261006.hex` 及配套ELF/map（各自MDK输出目录），与默认产物一致。两板Keil均0错误/0警告，Flash/RAM为19200/5456和55700/19808字节；真实HTTP长头/关键头拒绝/分包/早到结果一致性、网页错误阶段/防闪动/串行轮询、缓存/超时/两秒边界/回绕、三板16组2196检查含五分钟并行通过。已复现的137字节请求头原为400，现在202；记录校验和/向量/Flash范围及HEX内gzip网页一致性通过。未检测到ST-Link，未读取实板故障或自动烧录；用户两板配套升级后逐路验收。
 - `12 WEB_CONTROL`仅从机3/group1→主机2/group1，载荷11字节：[原命令10或11,通道1..4,值(风机0..100/窗口0..1),请求编号8字节]；编号按网页16位十六进制文本从左到右编码，不作浮点转换。`21 WEB_RESULT`仅反向，载荷9字节：[编号8字节,状态0成功/1失败/2结果未知/3忙]，flow沿请求返回。CRC/协议版本04保持。
 - 主机与从机最多一个网页在途请求，最近4条完成结果保留30秒；窗口保持原11请求/20回复并由主机转21给网页，不把21转PC。1秒排队期限/8秒网页总期限，无无线自动重发；重复请求在去重缓存内不重复动作，同编号不同参数拒绝。先到先执行，忙时拒绝；控制室遥测/窗口事务期间风机请求也返回现有busy错误机制。
 - 本地HTTP POST /api/control仅完整<=96字节同源application/json，字段request_id/type/channel/value，受理不代表执行。GET /api/control?id只查结果；浏览器仅显式操作发请求，断线/刷新/重启不自动补发。主从机更新，控制室与上位机原线格式保持。

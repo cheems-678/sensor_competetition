@@ -1,6 +1,13 @@
 # 主机 v4 架构
 
+- 通信回归审计修复（优先于下方reliable版）：发现主机调用图1032字节超过启动栈1024字节，先移除网页等待/执行中的完整LoRaMessage栈副本，网页动作与控制室动作共用标量窗口事务初始化，窗口网页结果与控制室ACK分开构建，避免深层嵌套。不通过放宽超时/改变协议/屏蔽报错恢复功能，不删除历史固件。
+- 构建新增tests/check_keil_stack.cjs，读取真实启动文件和Keil调用图，保留至少256字节给中断；已知最大调用栈超出可用预算则失败。该检查不代替实板高水位，但禁止再只看编译0错误。测试及诊断产物仍放现有tests/build与MDK输出目录，最终应另存stack_safe角色HEX/ELF/map。
+- 本次实板审计：用户确认第二探针接主机；SN `37FF71064E5734364CA61943`、UID `066DFF51/51547878/67054847`。HOTPLUG只读64KiB Flash后发现55392个已编程字节完全匹配从机 `LoraSlaveV1_slave_web_control_reliable_20261006.hex`，未匹配任何主机留档；主机CPU运行着从机映像。应重新下载明确角色的主机HEX到此序列号，不能按三个工程共用的LoraSlaveV1.hex基名判断角色。旧主机reliable版存在1032字节调用图风险，改用stack_safe版。
+- 当前主机修正版：`MDK-ARM/LoraSlaveV1.0/LoraSlaveV1_master_web_control_stack_safe_20261006.hex`及ELF/map/调用图HTM，SHA256 `1375BDD6F9ACE701419220A548D24A03F43605545C85BF328138C61086A6E437`；默认HEX一致，旧留档保留。Keil 0错误/0警告，Code18760/RO316/RW116/ZI5340，Flash19192/RAM5456字节，启动栈仍1024、已知调用深度512（不含未知间接调用/中断），栈预算检查保留256字节中断余量。26组runtime、10组协议、10组实际UART、三板17组10853检查通过；新五分钟整链路同时收到300次上位机遥测回复、持续主机广播、38条交错网页控制成功，不再只用空闲监测作为并行验收。
+- 修复后实板恢复需要用户重新烧录此主机HEX到上述主机探针SN/UID并完全断电重启；已匹配的从机reliable固件不用重烧。本轮仅只读诊断、代码/构建验证，不自动烧录或复位，不把软件回归当作实板已恢复。
 - 热点真实控制优化：现有runtime新增单条有界网页等待槽，仅等待在途遥测，接收tick起2000 ms到期取消；已有控制事务不抢占，网页先于后续遥测。诊断计数放现有MasterRuntimeDiag；LoRa载荷不变，实际风机/舵机驱动入口不绕过。测试沿既有tests，构建/留档沿MDK输出，用户配套烧录。
+- 当前网页控制配套固件：`MDK-ARM/LoraSlaveV1.0/LoraSlaveV1_master_web_control_reliable_20261006.hex`及ELF/map，默认HEX相同，SHA256 `94BDEA461C9F93418F991476CABAF0C26A5A9F2FA36BE184A9615C36BDD98076`；Keil 0错误/0警告，Code18768/RO316/RW116/ZI5340，Flash19200/RAM5456字节。原线格式、风机引脚/频率及窗口定时动作保持，旧产物保留。
+- `MasterRuntimeDiag.web_received/web_deferred/web_wait_timeout/web_applied/web_failed`分别记录真实入站请求、等待遥测、等待取消、PWM设置确认和驱动拒绝；执行等待槽时不重复算入站。26组runtime、10组协议/10组真实UART及三板16组2196检查含四路等待/去重/故障/五分钟并行通过。只读诊断须先匹配当前固件，本轮未连接或烧录实板。
 ## 粮面测距汇总（2026-10-06）
 
 - 按共同PROTOCOL_V4.md接受42字节/flags38从机数据并输出42字节/flags3B或3F，保持18/26/34兼容。lora_protocol.*校验测距四字段；master_runtime.*保存测距快照及接收tick，Bsp/lora.c实际发送队列以原年龄基准累计并过期填FFFF、更新CRC，不能重试续时。

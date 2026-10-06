@@ -405,7 +405,8 @@ static void BuildResponse(uint8_t kind)
         const char *names[]={"success","failed","unknown","busy","queued","waiting","unknown"};
         if(c->flags&CONTROL_ID_VALID)
         {id[0]='"';for(i=0U;i<8U;i++){static const char hex[]="0123456789abcdef";id[1U+2U*i]=hex[c->control_id[i]>>4U];id[2U+2U*i]=hex[c->control_id[i]&15U];}id[17]='"';id[18]=0;}
-        state=kind==REQUEST_CONTROL_POST?c->control_state:SlaveWebControl_Status(c->control_id,g_now);
+        state=SlaveWebControl_Status(c->control_id,g_now);
+        if(kind==REQUEST_CONTROL_POST&&c->http_status>=400U)state=c->control_state;
         reason=SlaveWebControl_Reason(c->control_id,g_now);phase=SlaveWebControl_PhaseName(state);
         if(kind==REQUEST_BAD){status="400 Bad Request";state=WEB_FAILED;reason=WEB_REASON_INVALID;phase="rejected";}
         if(kind==REQUEST_CONTROL_POST){if(c->http_status==202U)status="202 Accepted";else if(c->http_status==409U)status="409 Conflict";else if(c->http_status==503U)status="503 Service Unavailable";}

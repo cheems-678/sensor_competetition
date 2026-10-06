@@ -176,7 +176,7 @@ async function serviceCommand(){
     log('提交 '+commandPending.type+' '+commandPending.channel+' · '+commandPending.request_id);
     try{
       const {response,data}=await controlFetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:commandPending.request_id,type:commandPending.type,channel:commandPending.channel,value:commandPending.value})});
-      if(!response.ok)finishCommand(data.state||'failed',{...data,reason:data.reason||'http_rejected'});
+      if(!response.ok)finishCommand(data.state==='busy'?'busy':'failed',{...data,reason:data.reason&&data.reason!=='none'?data.reason:'http_rejected'});
       else if(data.request_id!==commandPending.request_id)finishCommand('unknown',{reason:'id_mismatch'});
       else if(!['queued','waiting'].includes(data.state))finishCommand(data.state,data);
       else progressCommand(data);
