@@ -796,7 +796,9 @@ class ServiceTests(unittest.TestCase):
     def test_api_public_surface_contains_only_expected_methods(self):
         api = DesktopAPI(Mock())
         self.assertEqual({name for name in dir(api) if not name.startswith("_")},
-                         {"refresh_ports", "connect", "disconnect", "read_once", "set_fan", "set_window", "get_snapshot"})
+                         {"refresh_ports", "connect", "disconnect", "read_once", "set_fan", "set_window", "get_snapshot",
+                          "get_ai_settings", "update_ai_settings", "update_warning_settings", "mark_warning_read",
+                      "analyze_warning", "set_warning_scenario", "save_ai_config", "test_ai_connection", "monitor_trends"})
 
     def test_close_during_command_does_not_run_a_final_tick(self):
         entered, release = threading.Event(), threading.Event()

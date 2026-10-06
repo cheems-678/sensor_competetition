@@ -105,6 +105,8 @@ def run(argv=None) -> int:
     assets = resource_dir()
     if not (assets / "index.html").is_file():
         return startup_error("缺少界面构建资源。请在 frontend/ 执行 npm ci 和 npm run build。", dialog=not args.check)
+    from backend.windows_platform import install_bounded_platform_queries
+    install_bounded_platform_queries()
     try:
         import webview
     except ImportError:
@@ -117,11 +119,13 @@ def run(argv=None) -> int:
         print("当前桌面入口面向 Windows WebView2；其他系统可使用 --legacy。", file=sys.stderr)
         return 1
     from backend.service import ControllerService, DesktopAPI
+    from backend.ai_config import EncryptedAIStore
     probe = None
     if args.self_test_output:
         from desktop_check import PackagingCheck
         probe = PackagingCheck(args.self_test_output, args.self_test_sample)
-    service = probe.service() if probe else ControllerService(demo=args.demo, db_path=database_path())
+    service = probe.service() if probe else ControllerService(demo=args.demo, db_path=database_path(),
+                      ai_store_factory=None if args.demo else EncryptedAIStore)
     server = AssetServer(assets)
     startup_exception = None
     try:

@@ -115,8 +115,8 @@ describe('existing controls and readable values', () => {
     const api = fakeAPI(state)
     render(<App api={api} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    expect(screen.getAllByRole('button', { name: /^切换到/ })).toHaveLength(9)
-    expect(document.querySelector('.page-index')).toHaveTextContent('01 / 09')
+    expect(screen.getAllByRole('button', { name: /^切换到/ })).toHaveLength(10)
+    expect(document.querySelector('.page-index')).toHaveTextContent('01 / 10')
     for (const [value, text] of [[0, '无雨'], [1, '有雨'], [null, '状态未知']] as const) {
       state.telemetry.rain = { state: value, source: 'master' }
       state.telemetry.slave_link = '从机链路：离线'; state.revision++

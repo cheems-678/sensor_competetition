@@ -59,6 +59,7 @@ class PackagingCheck:
                 check.info.update({"native_api_polls": check.api_calls,
                                    "demo": snapshot["demo"], "ports": snapshot["ports"],
                                    "port": snapshot["port"], "connected": snapshot["connected"],
+                                   "warnings": snapshot["warnings"], "ai_settings": snapshot["ai_settings"],
                                    "telemetry": snapshot["telemetry"]})
                 if not check.sample or (snapshot["telemetry"]["sounds"]["sound_rms_1"] == "0"
                                         and snapshot["telemetry"]["mq2"]["valid"]

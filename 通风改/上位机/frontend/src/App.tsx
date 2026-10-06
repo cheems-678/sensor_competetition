@@ -9,6 +9,7 @@ import { SmokeMonitor } from './components/smoke-monitor'
 import { HelpDetails } from './components/help-details'
 import { EnvironmentTrend } from './components/environment-trend'
 import { UltrasonicMonitor } from './components/ultrasonic-monitor'
+import { WarningMonitor } from './components/warning-monitor'
 import { useEnvironmentHistory } from './lib/environment-history'
 import { smokeReading } from './lib/smoke-index'
 import { useMonitor } from './lib/use-monitor'
@@ -20,6 +21,7 @@ const metricDefinitions = [
 ] as const
 const pages = [
   { id: 'overview', title: '粮仓总览', eyebrow: 'OVERVIEW', icon: Box },
+  { id: 'warnings', title: '智能预警', eyebrow: 'LOCAL WARNING', icon: Activity },
   { id: 'environment', title: '环境监测', eyebrow: 'ENVIRONMENT', icon: Thermometer },
   { id: 'rain', title: '雨滴监测', eyebrow: 'RAINDROP MONITOR', icon: CloudRain },
   { id: 'smoke', title: '烟雾监测', eyebrow: 'SMOKE MONITOR', icon: Activity },
@@ -110,8 +112,12 @@ export function App({ api: suppliedAPI }: { api?: DesktopAPI }) {
           <div className="panel summary-card"><span>控制室连接</span><strong>{snapshot.connected ? snapshot.port : '未连接'}</strong></div>
           <div className="panel summary-card"><span>从机链路</span><strong>{slaveLink}</strong></div>
           <div className="panel summary-card"><span>最近有效遥测</span><strong>{snapshot.telemetry.updated_at ?? '--'}</strong></div>
+          <div className="panel summary-card"><span>当前预警</span><strong>{snapshot.warnings?.active_count ?? 0}</strong></div>
         </div>
         <GranaryView active={page === 'overview'} />
+      </div>
+      <div className="function-page" hidden={page !== 'warnings'} data-page="warnings" aria-label="智能预警内容">
+        <WarningMonitor snapshot={snapshot} api={api} execute={execute} />
       </div>
       <div className="function-page" hidden={page !== 'environment'} data-page="environment" aria-label="环境监测内容">
         <div className="column-heading"><span>BME280</span><span className="section-subtitle">{snapshot.telemetry.updated_at ? `更新于 ${snapshot.telemetry.updated_at}` : '等待有效遥测'}</span></div>

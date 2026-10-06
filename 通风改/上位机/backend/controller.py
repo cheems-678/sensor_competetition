@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import copy
 import queue
 import threading
 import time
@@ -10,6 +11,11 @@ from datetime import datetime
 from typing import Callable
 
 from .protocol import FrameStreamParser, LoRaProtocol
+from .warning_engine import WarningEngine, PROVIDERS
+from .warning_service import ExplanationWorker
+from .ai_client import validate_profile, validate_key
+from .ai_config import MemoryAIStore, AIConfigError
+from urllib.parse import urlsplit
 
 try:
     import serial
@@ -54,6 +60,7 @@ class Controller:
         demo: bool = False,
         start_readers: bool = True,
         closing: Callable | None = None,
+        ai_store=None,
     ):
         self.database = database
         self.serial_factory = serial_factory if serial_factory is not None else (
@@ -98,6 +105,299 @@ class Controller:
         self.notice = None
         self._notice_id = 0
         self.revision = 0
+        self.warning_engine = WarningEngine(enabled=self.demo)
+        self.ai_settings = {"provider": "deepseek", "profiles": copy.deepcopy(PROVIDERS)}
+        self._ai_revision = 0
+        self._analysis_sequence = 0
+        self._analysis_tokens = {}
+        self.explanations = ExplanationWorker()
+        self._ai_store = ai_store or MemoryAIStore()
+        self._ai_credentials = {}
+        self.ai_mode = "simulation" if self.demo else "api"
+        self.ai_test = dict(status="idle", message="", provider=None, model=None)
+        self._ai_test_token = None
+        self.manual_trend = None
+        self._manual_token = None
+        self._ai_values = {key: None for key in ("master_temp", "slave_temp", "master_humidity", "slave_humidity")}
+        self._load_ai_config()
+
+    def _load_ai_config(self):
+        try:
+            saved = self._ai_store.load()
+            if saved is None:
+                return
+            settings = copy.deepcopy(self.ai_settings)
+            for provider, profile in saved["profiles"].items():
+                if provider == "custom" and not profile["base_url"] and not profile["model"]:
+                    continue
+                address, model = validate_profile(provider, profile["base_url"], profile["model"])
+                settings["profiles"][provider] = dict(base_url=address, model=model)
+            if saved["provider"] not in PROVIDERS or saved["mode"] not in ("api", "simulation"):
+                raise ValueError()
+            credentials = {}
+            for provider, credential in saved.get("credentials", {}).items():
+                if provider not in PROVIDERS or credential["base_url"] != settings["profiles"][provider]["base_url"]:
+                    raise ValueError()
+                credentials[provider] = dict(api_key=validate_key(credential["api_key"]),
+                                             base_url=credential["base_url"], remembered=True)
+            settings["provider"] = saved["provider"]
+            self.ai_settings, self.ai_mode, self._ai_credentials = settings, saved["mode"], credentials
+        except Exception:
+            self._show_notice("AI配置读取失败", "保存的AI配置无法读取或解密，请重新填写配置；原文件未修改")
+
+    def _public_ai_settings(self):
+        settings = copy.deepcopy(self.ai_settings)
+        for provider, profile in settings["profiles"].items():
+            credential = self._ai_credentials.get(provider)
+            profile.update(has_key=bool(credential), remembered=bool(credential and credential["remembered"]))
+        settings.update(mode=self.ai_mode, connection=copy.deepcopy(self.ai_test), persistent=self._ai_store.persistent)
+        return settings
+
+    def save_ai_config(self, provider, base_url, model, mode, api_key="", remember=True):
+        if mode not in ("api", "simulation") or type(remember) is not bool or not isinstance(api_key, str):
+            raise ValueError("AI配置无效")
+        address, model = validate_profile(provider, base_url, model)
+        remember = remember and self._ai_store.persistent
+        credentials = copy.deepcopy(self._ai_credentials)
+        if credentials.get(provider, {}).get("base_url") != address:
+            credentials.pop(provider, None)
+        if api_key:
+            credentials[provider] = dict(api_key=validate_key(api_key), base_url=address, remembered=remember)
+        elif provider in credentials:
+            credentials[provider]["remembered"] = remember
+        settings = copy.deepcopy(self.ai_settings)
+        settings["provider"] = provider
+        settings["profiles"][provider] = dict(base_url=address, model=model)
+        # Encrypt/save before publishing new state; a storage failure keeps old configuration.
+        saved_credentials = {p: dict(api_key=c["api_key"], base_url=c["base_url"]) for p, c in credentials.items() if c["remembered"]}
+        self._ai_store.save(dict(version=1, provider=provider, mode=mode,
+                                 profiles=settings["profiles"], credentials=saved_credentials))
+        self.ai_settings, self.ai_mode, self._ai_credentials = settings, mode, credentials
+        self._ai_revision += 1
+        self._invalidate_analysis()
+        self._changed()
+
+    def _request_ai_config(self):
+        provider = self.ai_settings["provider"]
+        profile = self.ai_settings["profiles"][provider]
+        credential = self._ai_credentials.get(provider)
+        if not credential or credential["base_url"] != profile["base_url"]:
+            raise ValueError("请先填写当前厂家的API Key并应用配置")
+        validate_profile(provider, profile["base_url"], profile["model"])
+        return dict(provider=provider, **profile, api_key=credential["api_key"])
+
+    def _analysis_context(self):
+        now = self.clock()
+        stats = {}
+        for key, series in self.warning_engine.series.items():
+            if series:
+                readings = [point[1] for point in series]
+                stats[key] = dict(min=min(readings), max=max(readings), mean=sum(readings)/len(readings),
+                                  count=len(readings), span_seconds=series[-1][0]-series[0][0],
+                                  last_age_seconds=max(0, now-series[-1][0]))
+        return dict(data_source="demo" if self.demo else "telemetry", requested_at=self._warning_stamp(),
+                    connected=self.serial_port is not None, sample_id=self.sample_id,
+                    telemetry_age_seconds=None if self.last_telemetry_at is None else max(0, now-self.last_telemetry_at),
+                    current_measurements=copy.deepcopy(self._ai_values),
+                    units=dict(temperature="Celsius", humidity="percent_RH", humidity_rate="percentage_points_per_minute"),
+                    trends=copy.deepcopy(self.warning_engine.metrics), statistics=stats,
+                    fans=[dict(channel=c, pwm_duty_percent=self.duties[c], confirmation=self.fan_status[c]) for c in self.FAN_PINS],
+                    windows=[dict(channel=c, confirmation=self.window_statuses[c]) for c in self.SERVO_PINS])
+
+    def test_ai_connection(self):
+        if self.ai_mode != "api":
+            raise ValueError("请应用真实API模式后再测试")
+        if self._ai_test_token is not None:
+            return
+        config = self._request_ai_config()
+        self._analysis_sequence += 1
+        token = (0, self.connection_generation, self._ai_revision, self._analysis_sequence)
+        if not self.explanations.submit(token, {"purpose": "connection_test"}, config, {"data_source": "connection_test", "message": "没有现场数据，仅验证接口能返回JSON分析结构"}):
+            raise ValueError("分析队列繁忙，请稍后测试")
+        self._ai_test_token = token
+        self.ai_test = dict(status="pending", message="正在测试API…", provider=config["provider"], model=config["model"])
+        self._changed()
+
+    def _warning_stamp(self):
+        return self.wall_clock().isoformat(timespec="seconds")
+
+    def _invalidate_analysis(self):
+        self.explanations.cancel(list(self._analysis_tokens.values()) + ([self._ai_test_token] if self._ai_test_token else [])
+                                 + ([self._manual_token] if self._manual_token else []))
+        self._analysis_tokens.clear()
+        self._ai_test_token = None
+        self._manual_token = None
+        if self.manual_trend is not None:
+            self.manual_trend["stale"] = True
+            self.manual_trend["analysis"]["status"] = "stale"
+        if self.ai_test["status"] != "idle":
+            self.ai_test.update(status="stale", message="配置或连接已变化，请重新测试API")
+        for event in self.warning_engine.events:
+            if event["analysis"]["status"] != "idle":
+                event["analysis"].update(status="stale")
+
+    def update_warning_settings(self, enabled, temp_rate, humidity_rate):
+        # Validate all inputs before changing any setting.
+        if type(enabled) is not bool or any(type(v) not in (float, int) or not math.isfinite(v) or v <= 0
+                                            for v in (temp_rate, humidity_rate)):
+            raise ValueError("检测参数无效，速度必须为有限正数")
+        if self.warning_engine.rates != {"temp": temp_rate, "humidity": humidity_rate}:
+            self._ai_revision += 1
+            self._invalidate_analysis()
+        self.warning_engine.set_rates(temp_rate, humidity_rate, self._warning_stamp())
+        self.warning_engine.set_enabled(enabled, self._warning_stamp())
+        self._changed()
+
+    def update_ai_settings(self, provider, base_url=None, model=None):
+        if not isinstance(provider, str) or provider not in PROVIDERS:
+            raise ValueError("厂家配置无效")
+        if base_url is None and model is None:
+            # Selection does not rewrite a profile from a potentially old UI snapshot.
+            self.ai_settings["provider"] = provider
+            self._ai_revision += 1
+            self._invalidate_analysis()
+            self._changed()
+            return
+        if not isinstance(base_url, str) or not isinstance(model, str):
+            raise ValueError("厂家配置无效")
+        base_url, model = base_url.strip(), model.strip()
+        parts = urlsplit(base_url)
+        if base_url and (parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment):
+            raise ValueError("接口地址必须为不含凭据的HTTPS地址")
+        if len(base_url) > 512 or len(model) > 128:
+            raise ValueError("配置内容过长")
+        # Empty custom drafts are permitted in this offline phase.
+        if provider != "custom" and (not base_url or not model):
+            raise ValueError("接口地址和模型不能为空")
+        self.ai_settings["provider"] = provider
+        self.ai_settings["profiles"][provider] = dict(base_url=base_url, model=model)
+        if self._ai_credentials.get(provider, {}).get("base_url") != base_url:
+            self._ai_credentials.pop(provider, None)
+        self._ai_revision += 1
+        self._invalidate_analysis()
+        self._changed()
+
+    def mark_warning_read(self, event_id):
+        event = self._warning_event(event_id)
+        event["read"] = True
+        self._changed()
+
+    def _warning_event(self, event_id):
+        if type(event_id) is not int:
+            raise ValueError("事件编号无效")
+        event = next((e for e in self.warning_engine.events if e["id"] == event_id), None)
+        if event is None:
+            raise ValueError("预警事件不存在")
+        return event
+
+    def analyze_warning(self, event_id):
+        event = self._warning_event(event_id)
+        if event_id in self._analysis_tokens:
+            return
+        config = self._request_ai_config() if self.ai_mode == "api" else None
+        self._analysis_sequence += 1
+        token = (event_id, self.connection_generation, self._ai_revision, self._analysis_sequence)
+        evidence = {key: copy.deepcopy(event[key]) for key in ("kind", "source", "status", "occurred_at", "evidence")}
+        if not self.explanations.submit(token, evidence, config, self._analysis_context()):
+            event["analysis"].update(status="error", result={"error": "分析队列繁忙，请重试"})
+        else:
+            self._analysis_tokens[event_id] = token
+            provider = self.ai_settings["provider"]
+            event["analysis"] = dict(status="pending", result=None, provider=provider,
+                                     model=self.ai_settings["profiles"][provider]["model"], mode=self.ai_mode,
+                                     data_source="demo" if self.demo else "telemetry")
+        self._changed()
+
+    def monitor_trends(self):
+        if self._manual_token is not None:
+            return
+        report = self.warning_engine.inspect(self.clock(), self._warning_stamp(),
+                                            (self.serial_port is not None and self.last_telemetry_at is not None)
+                                            or (self.demo and self.warning_engine.connected))
+        self._analysis_sequence += 1
+        report.update(id=self._analysis_sequence, data_source="demo" if self.demo else "telemetry",
+                      analysis=dict(status="idle", result=None, provider=self.ai_settings["provider"],
+                                    model=self.ai_settings["profiles"][self.ai_settings["provider"]]["model"],
+                                    mode=self.ai_mode, data_source="demo" if self.demo else "telemetry"))
+        self.manual_trend = report
+        if report["status"] == "unavailable":
+            report["analysis"].update(status="error", result={"error": "没有可用数据，未请求AI；请先确认实测读数。"})
+            self._changed()
+            return
+        try:
+            config = self._request_ai_config() if self.ai_mode == "api" else None
+        except ValueError as error:
+            report["analysis"].update(status="error", result={"error": str(error)})
+            self._changed()
+            return
+        token = (-1, self.connection_generation, self._ai_revision, self._analysis_sequence)
+        evidence = dict(kind="trend_review", purpose="manual_trend_review", evidence=copy.deepcopy({
+            key: report[key] for key in ("checked_at", "status", "message", "channels", "event_ids")}))
+        if self.explanations.submit(token, evidence, config, self._analysis_context()):
+            self._manual_token = token
+            report["analysis"]["status"] = "pending"
+        else:
+            report["analysis"].update(status="error", result={"error": "分析队列繁忙，请重新点击监测。"})
+        self._changed()
+
+    def _drain_explanations(self):
+        while True:
+            try:
+                token, result, error = self.explanations.results.get_nowait()
+            except queue.Empty:
+                return
+            event_id = token[0]
+            if event_id == -1:
+                if token == self._manual_token and self.manual_trend is not None:
+                    self._manual_token = None
+                    self.manual_trend["analysis"].update(status="error" if error else "complete",
+                                                         result={"error": error} if error else result,
+                                                         analyzed_at=self._warning_stamp())
+                    self._changed()
+                continue
+            if event_id == 0:
+                if token == self._ai_test_token:
+                    self._ai_test_token = None
+                    self.ai_test.update(status="error" if error else "complete", message=error or "API连接成功，模型返回格式有效", tested_at=self._warning_stamp())
+                    self._changed()
+                continue
+            if self._analysis_tokens.get(event_id) != token:
+                continue
+            self._analysis_tokens.pop(event_id, None)
+            event = next((e for e in self.warning_engine.events if e["id"] == event_id), None)
+            if event is not None:
+                event["analysis"].update(status="error" if error else "complete",
+                                         result={"error": error} if error else result,
+                                         analyzed_at=self._warning_stamp())
+                self._changed()
+
+    def set_warning_scenario(self, name):
+        if not self.demo:
+            raise ValueError("模拟场景仅限演示模式")
+        from .warning_replay import run_scenario, SCENARIOS
+        if name not in SCENARIOS:
+            raise ValueError("未知模拟场景")
+        self.warning_engine.stop(self._warning_stamp())
+        self._invalidate_analysis()
+        # Virtual samples end at current monotonic time; serial generation stays intact.
+        self._ai_revision += 1
+        now = self.clock()
+        lengths = {"normal": 360, "warming": 400, "humidity": 400, "spike": 600,
+                   "missing": 380, "timeout": 370, "recovery": 1050, "reconnect": 410}
+        from datetime import timedelta
+        end = self.wall_clock()
+        length = lengths[name]
+        run_scenario(self.warning_engine, name,
+                     stamp=lambda second: (end + timedelta(seconds=second - length)).isoformat(timespec="seconds"),
+                     offset=now-length)
+        # Resume real demo sample numbering without accepting duplicate frames.
+        self.warning_engine._sample_id = self.sample_id
+        self._ai_values = {key: series[-1][1] if series and key in self.warning_engine.metrics else None
+                           for key, series in self.warning_engine.series.items()}
+        self.last_telemetry_at = now if any(value is not None for value in self._ai_values.values()) else None
+        for key, value in self._ai_values.items():
+            self.values[key] = "--" if value is None else f"{value:g} {'℃' if key.endswith('temp') else '%RH'}"
+        self._changed()
 
     def _changed(self):
         self.revision += 1
@@ -136,6 +436,9 @@ class Controller:
             return
         self.serial_port = new_port
         self.connection_generation += 1
+        self.warning_engine.reset_window()
+        self.warning_engine.connected = True
+        self._invalidate_analysis()
         self.stop_event = threading.Event()
         parser = FrameStreamParser()
         self.telemetry_pending = None
@@ -153,6 +456,8 @@ class Controller:
         self._append_log(f"已连接 {self.port}")
 
     def disconnect(self):
+        self.warning_engine.stop(self._warning_stamp())
+        self._invalidate_analysis()
         if self.window_pending is not None:
             self.window_status = "已断开，执行结果未知"
         elif self.window_queued_action is not None:
@@ -213,6 +518,7 @@ class Controller:
         return True
 
     def _clear_telemetry(self):
+        self._ai_values = {key: None for key in self._ai_values}
         self.values = {key: "--" for key in self.values}
         self.sounds = {key: "--" for key in self.sounds}
         self.rain = {"state": None, "source": None}
@@ -280,6 +586,7 @@ class Controller:
         if self.telemetry_pending is not None:
             flow, sent_at = self.telemetry_pending
             if now - sent_at >= self.TELEMETRY_TIMEOUT_S:
+                self.warning_engine.communication_timeout(self._warning_stamp(), now)
                 self.telemetry_pending = None
                 self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
                 self._clear_telemetry()
@@ -378,6 +685,12 @@ class Controller:
             self._changed()
 
     def tick(self):
+        self._drain_explanations()
+        before = copy.deepcopy(self.warning_engine.metrics)
+        statuses = [e["status"] for e in self.warning_engine.events]
+        self.warning_engine.expire(self.clock())
+        if before != self.warning_engine.metrics or statuses != [e["status"] for e in self.warning_engine.events]:
+            self._changed()
         if self._closing():
             return
         while True:
@@ -415,6 +728,7 @@ class Controller:
                 return
             now = self.clock()
             if now - self.telemetry_pending[1] >= self.TELEMETRY_TIMEOUT_S:
+                self.warning_engine.communication_timeout(self._warning_stamp(), now)
                 self.telemetry_pending = None
                 self.next_telemetry_poll_at = now + self.TELEMETRY_POLL_INTERVAL_S
                 self._clear_telemetry()
@@ -438,6 +752,10 @@ class Controller:
             self.last_telemetry_at = now
             self.updated_at = self.wall_clock().strftime("%H:%M:%S")
             self.sample_id += 1
+            self._ai_values = {key: values[name] for key, name, _ in self.FIELD_LABELS if key in self._ai_values}
+            self.warning_engine.observe(self.sample_id, now, self._warning_stamp(),
+                                        {key: values[name] for key, name, _ in self.FIELD_LABELS
+                                         if key.endswith(("temp", "humidity"))})
             for key, name, unit in self.FIELD_LABELS:
                 value = values[name]
                 self.values[key] = "--" if value is None else f"{value:g} {unit}"
@@ -486,8 +804,11 @@ class Controller:
 
     def snapshot(self, after_log_id: int = 0) -> dict:
         busy = self._window_busy()
+        warnings = self.warning_engine.snapshot()
+        warnings["manual"] = copy.deepcopy(self.manual_trend)
         return {
             "revision": self.revision, "demo": self.demo,
+            "warnings": warnings, "ai_settings": self._public_ai_settings(),
             "connected": self.serial_port is not None, "port": self.port, "ports": list(self.ports),
             "controls": {"read_enabled": not busy, "fan_enabled": not busy,
                          "window_enabled": self.serial_port is not None and not busy},
@@ -508,4 +829,6 @@ class Controller:
 
     def close(self):
         self.disconnect()
+        self.explanations.close()
+        self._ai_credentials.clear()
         self.database.close()

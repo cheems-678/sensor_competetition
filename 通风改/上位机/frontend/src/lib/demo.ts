@@ -1,4 +1,4 @@
-import { initialSnapshot, type Accepted, type DesktopAPI, type Snapshot } from './types'
+import { initialSnapshot, type Accepted, type DesktopAPI, type Snapshot, type Provider, type WarningEvent, type TrendChannel, type TrendReport } from './types'
 import { decimalDraft } from './duty'
 
 // Browser-only preview. No serial API, database or remote endpoint is used here.
@@ -12,8 +12,13 @@ export class BrowserDemo implements DesktopAPI {
   private mq2SourceAge = 0
   private previewSmokeMv: number | null = null
   private timers = new Set<ReturnType<typeof setTimeout>>()
+  private warningId = 0
+  private manualId = 0
+  private analysisGeneration = 0
   constructor() {
     this.state.demo = true
+    this.state.warnings.enabled = true
+    this.state.ai_settings.mode = 'simulation'
     this.state.ports = ['DEMO · 模拟控制室']
     this.state.port = this.state.ports[0]
     this.log('演示模式：不连接硬件，不写入数据库。')
@@ -68,8 +73,153 @@ export class BrowserDemo implements DesktopAPI {
     this.state.revision++
   }
   async refresh_ports(): Promise<Accepted> { this.state.revision++; return { accepted: true } }
+  async get_ai_settings() { return structuredClone(this.state.ai_settings) }
+  async save_ai_config(provider: Provider, base_url: string, model: string, mode: 'api' | 'simulation', api_key = '', _remember = true): Promise<Accepted> {
+    await this.update_ai_settings(provider, base_url, model)
+    this.state.ai_settings.mode = mode
+    const previous = this.state.ai_settings.profiles[provider]
+    previous.has_key = Boolean(api_key) || Boolean(previous.has_key)
+    previous.remembered = false // Browser preview never persists credentials.
+    this.state.revision++
+    return { accepted: true }
+  }
+  async test_ai_connection(): Promise<Accepted> {
+    this.state.ai_settings.connection = { status: 'error', message: '浏览器预览不调用真实 API，请使用桌面接口版测试' }
+    this.state.revision++
+    return { accepted: true }
+  }
+  async update_ai_settings(provider: Provider, base_url?: string, model?: string): Promise<Accepted> {
+    this.state.ai_settings.provider = provider
+    if (base_url !== undefined && model !== undefined) this.state.ai_settings.profiles[provider] = { base_url, model }
+    this.analysisGeneration++
+    this.state.warnings.events.forEach(event => { if (event.analysis.status !== 'idle') event.analysis.status = 'stale' })
+    if (this.state.warnings.manual) { this.state.warnings.manual.stale = true; this.state.warnings.manual.analysis.status = 'stale' }
+    this.state.revision++
+    return { accepted: true }
+  }
+  async update_warning_settings(enabled: boolean, temp_rate: number, humidity_rate: number): Promise<Accepted> {
+    if (![temp_rate, humidity_rate].every(value => Number.isFinite(value) && value > 0)) throw new Error('变化速度必须为有限正数')
+    const changed = temp_rate !== this.state.warnings.rates.temp || humidity_rate !== this.state.warnings.rates.humidity
+    this.state.warnings.enabled = enabled
+    this.state.warnings.rates = { temp: temp_rate, humidity: humidity_rate }
+    this.state.warnings.events.forEach(event => {
+      if (event.kind !== 'communication' && (changed || (!enabled && event.trigger !== 'manual')) && ['active','unavailable'].includes(event.status)) {
+        event.status = 'stopped'; event.ended_at = new Date().toISOString()
+      }
+    })
+    this.state.warnings.active_count = this.state.warnings.events.filter(event => ['active','unavailable'].includes(event.status)).length
+    if (changed) { this.analysisGeneration++; if (this.state.warnings.manual) { this.state.warnings.manual.stale = true; this.state.warnings.manual.analysis.status = 'stale' } }
+    this.state.revision++
+    return { accepted: true }
+  }
+  private stopWarnings() {
+    this.analysisGeneration++
+    if (this.state.warnings.manual) { this.state.warnings.manual.stale = true; this.state.warnings.manual.analysis.status = 'stale' }
+    this.state.warnings.metrics = {}
+    this.state.warnings.active_count = 0
+    this.state.warnings.events.forEach(event => {
+      if (event.status === 'active' || event.status === 'unavailable') { event.status = 'stopped'; event.ended_at = new Date().toISOString() }
+      if (event.analysis.status === 'pending') event.analysis.status = 'stale'
+    })
+  }
+  async mark_warning_read(id: number): Promise<Accepted> {
+    const event = this.state.warnings.events.find(event => event.id === id)
+    if (event) event.read = true
+    this.state.revision++
+    return { accepted: true }
+  }
+  async monitor_trends(): Promise<Accepted> {
+    if (this.state.warnings.manual?.analysis.status === 'pending') return {accepted:true}
+    const channels: Record<string, TrendChannel> = {}
+    const event_ids: number[] = []
+    for (const key of ['master_temp','master_humidity','slave_temp','slave_humidity'] as const) {
+      const metric = this.state.warnings.metrics[key]
+      const current = Number.parseFloat(this.state.telemetry.values[key])
+      const available = Boolean(metric || (this.state.connected && Number.isFinite(current)))
+      const kind = key.endsWith('temp') ? 'temp' : 'humidity'
+      const source = key.startsWith('master') ? 'master' : 'slave'
+      const rate = metric?.rate ?? null
+      const complete = available && (metric?.span_seconds ?? 0) >= 120 && rate != null
+      const threshold = this.state.warnings.rates[kind]
+      const exceeded = complete && rate >= threshold
+      const deadband = Math.min(kind === 'temp' ? 0.02 : 0.05, threshold * 0.1)
+      channels[key] = {source,kind,state:complete?'ready':available?'insufficient':'unavailable', direction:rate==null?'unknown':rate>deadband?'rising':rate < -deadband?'falling':'stable', current:Number.isFinite(current)?current:null,start:null,rate,threshold,span_seconds:metric?.span_seconds ?? 0,sample_count:metric ? 121 : available ? 1 : 0,exceeded,min:null,max:null}
+      if (exceeded) {
+        let event = this.state.warnings.events.find(item => item.key === key && ['active','unavailable'].includes(item.status))
+        const evidence = {current:channels[key].current ?? 0,rate:rate!,threshold,window_seconds:120,sample_count:121}
+        if (!event) {
+          event = {id:++this.warningId,key,source,kind,trigger:'manual',status:'active',occurred_at:new Date().toISOString(),ended_at:null,read:false,evidence,analysis:{status:'idle',result:null,provider:null,model:null}}
+          this.state.warnings.events.unshift(event)
+        } else { event.status = 'active'; event.evidence = evidence }
+        event_ids.push(event.id)
+      }
+    }
+    const status = event_ids.length ? 'abnormal' : Object.values(channels).every(item=>item.state==='ready') ? 'normal' : Object.values(channels).some(item=>item.state==='ready') ? 'partial' : Object.values(channels).some(item=>item.state==='insufficient') ? 'insufficient' : 'unavailable'
+    const messages = {abnormal:'手动检查发现上升趋势超限，已生成或更新预警。',normal:'本次未发现配置中的上升趋势超限。',partial:'部分通道未发现超限，其余数据不足或不可用，不能完整判定。',insufficient:'有效数据不足两分钟，仅显示短时趋势，尚不能完整判定预警。',unavailable:'没有可用温湿度数据，请确认连接及传感器读数。'}
+    const provider = this.state.ai_settings.provider
+    const report: TrendReport = {id:++this.manualId,checked_at:new Date().toISOString(),status,message:messages[status],channels,event_ids,stale:false,data_source:'demo',analysis:{status:'pending',provider,model:this.state.ai_settings.profiles[provider].model,mode:this.state.ai_settings.mode,data_source:'demo',result:null}}
+    this.state.warnings.manual = report
+    this.state.warnings.active_count = this.state.warnings.events.filter(item=>['active','unavailable'].includes(item.status)).length
+    if (status === 'unavailable' || this.state.ai_settings.mode === 'api') {
+      report.analysis.status = 'error'; report.analysis.result = {error: status === 'unavailable' ? '没有可用数据，未请求AI；请先确认实测读数。' : '浏览器预览不调用真实 API，请使用桌面版分析'}
+    } else {
+      const generation = this.analysisGeneration
+      this.later(() => { if (generation !== this.analysisGeneration || this.state.warnings.manual !== report) return
+        report.analysis.status = 'complete'; report.analysis.analyzed_at = new Date().toISOString()
+        report.analysis.result = {summary:report.message,possible_causes:['需要结合现场条件解释'],suggested_checks:['继续观察温湿度变化'],limitations:'模拟解释，未调用 API；数据不足时不能完整判定。'}
+        this.state.revision++
+      })
+    }
+    this.state.revision++
+    return {accepted:true}
+  }
+  async analyze_warning(id: number): Promise<Accepted> {
+    const event = this.state.warnings.events.find(event => event.id === id)
+    if (!event || event.analysis.status === 'pending') return { accepted: true }
+    if (this.state.ai_settings.mode === 'api') {
+      event.analysis.status = 'error'; event.analysis.result = { error: '浏览器预览不调用真实 API，请使用桌面接口版分析' }
+      this.state.revision++
+      return { accepted: true }
+    }
+    const generation = this.analysisGeneration
+    const provider = this.state.ai_settings.provider
+    event.analysis = { status: 'pending', result: null, provider, model: this.state.ai_settings.profiles[provider].model, mode: 'simulation', data_source: 'demo' }
+    this.state.revision++
+    this.later(() => {
+      if (generation !== this.analysisGeneration) return
+      event.analysis.status = 'complete'; event.analysis.analyzed_at = new Date().toISOString()
+      event.analysis.result = { summary: event.kind === 'communication' ? '遥测应答超时，环境状态未知。' : `实测趋势超过配置变化速度，建议检查现场条件。`, possible_causes: ['环境条件或测量状态变化'], suggested_checks: ['检查实测读数及设备通信状态'], limitations: '模拟解释，未调用 API；不能据此确定故障原因或粮食状态。' }
+      this.state.revision++
+    })
+    return { accepted: true }
+  }
+  async set_warning_scenario(name: string): Promise<Accepted> {
+    this.stopWarnings()
+    const warming = ['warming', 'recovery', 'reconnect'].includes(name)
+    const kind = name === 'timeout' ? 'communication' : name === 'humidity' ? 'humidity' : 'temp'
+    const rate = kind === 'humidity' ? 2 : 0.6
+    const threshold = kind === 'humidity' ? this.state.warnings.rates.humidity : this.state.warnings.rates.temp
+    if (name === 'timeout' || (this.state.warnings.enabled && (warming || name === 'humidity') && rate >= threshold)) {
+      const event: WarningEvent = { id: ++this.warningId, key: kind === 'communication' ? 'communication' : `master_${kind}`, kind,
+        source: kind === 'communication' ? 'link' : 'master', status: name === 'recovery' || name === 'timeout' ? 'resolved' : name === 'reconnect' ? 'stopped' : 'active',
+        occurred_at: new Date(Date.now() - 70000).toISOString(), ended_at: null, read: false,
+        evidence: kind === 'communication' ? { message: '遥测应答超时，当前环境状态未知' } : { current: kind === 'temp' ? 28 : 63.33, rate, threshold, window_seconds: 120, sample_count: 121 },
+        analysis: { status: 'idle', result: null, provider: null, model: null } }
+      if (event.status === 'resolved' || event.status === 'stopped') event.ended_at = new Date().toISOString()
+      this.state.warnings.events.unshift(event)
+      this.state.warnings.events = this.state.warnings.events.slice(0, 200)
+      this.state.warnings.active_count = event.status === 'active' ? 1 : 0
+    }
+    this.state.warnings.metrics = { master_temp: { span_seconds: name === 'reconnect' ? 10 : 120, rate: name === 'reconnect' ? null : warming ? 0.6 : 0 }, master_humidity: { span_seconds: 120, rate: name === 'humidity' ? 2 : 0 },slave_temp:{span_seconds:120,rate:0},slave_humidity:{span_seconds:120,rate:0} }
+    this.state.telemetry.values.master_temp = `${warming ? 28 : 24} °C`
+    this.state.telemetry.values.master_humidity = `${name === 'humidity' ? 63.33 : 50} %RH`
+    this.state.telemetry.values.slave_temp = '24.2 °C'; this.state.telemetry.values.slave_humidity = '51.3 %RH'
+    this.state.revision++
+    return { accepted: true }
+  }
   async connect(port: string): Promise<Accepted> {
     if (!port.trim()) { this.notice('端口为空', '请输入或选择控制室串口'); return { accepted: true } }
+    this.stopWarnings()
     this.state.connected = true
     this.state.port = port
     this.state.window.status = '已连接，尚未发送，位置未知'
@@ -80,6 +230,7 @@ export class BrowserDemo implements DesktopAPI {
     return { accepted: true }
   }
   async disconnect(): Promise<Accepted> {
+    this.stopWarnings()
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
     this.state.connected = false

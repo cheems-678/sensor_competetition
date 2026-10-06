@@ -16,12 +16,13 @@ from .storage import TelemetryDatabase
 class ControllerService:
     def __init__(self, *, demo=False, db_path="sensor_data.db", database_factory: Callable = TelemetryDatabase,
                  serial_factory: Callable | None = None, port_provider: Callable | None = None,
-                 controller_factory: Callable = Controller):
+                 controller_factory: Callable = Controller, ai_store_factory: Callable | None = None):
         self._demo, self._db_path = bool(demo), ":memory:" if demo else db_path
         self._database_factory = database_factory
         self._serial_factory = DemoSerial if demo else serial_factory
         self._port_provider = (lambda: ["DEMO"]) if demo else port_provider
         self._controller_factory = controller_factory
+        self._ai_store_factory = ai_store_factory
         self._commands: queue.Queue[tuple] = queue.Queue()
         self._lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
@@ -60,7 +61,8 @@ class ControllerService:
             database = self._database_factory(self._db_path)
             controller = self._controller_factory(
                 database, serial_factory=self._serial_factory, port_provider=self._port_provider,
-                demo=self._demo, closing=self._closing.is_set)
+                demo=self._demo, closing=self._closing.is_set,
+                **({"ai_store": self._ai_store_factory()} if self._ai_store_factory else {}))
             controller.refresh_ports()
             self._publish(controller)
             self._ready.set()
@@ -104,7 +106,9 @@ class ControllerService:
             self._finished.set()
 
     def submit(self, method: str, *arguments) -> dict:
-        if method not in ("refresh_ports", "connect", "disconnect", "read_once", "set_fan", "set_window"):
+        if method not in ("refresh_ports", "connect", "disconnect", "read_once", "set_fan", "set_window",
+                          "update_warning_settings", "update_ai_settings", "mark_warning_read", "analyze_warning", "set_warning_scenario",
+                          "save_ai_config", "test_ai_connection", "monitor_trends"):
             raise ValueError("unsupported desktop command")
         with self._dispatch_lock:
             accepted = (not self._closing.is_set() and self._ready.is_set()
@@ -137,7 +141,7 @@ class ControllerService:
 
 
 class DesktopAPI:
-    """These seven methods are the only public attributes exposed to JavaScript."""
+    """Read cached snapshots; all mutations are queued to the controller owner."""
     def __init__(self, service: ControllerService):
         self._service = service
 
@@ -161,3 +165,30 @@ class DesktopAPI:
 
     def get_snapshot(self, after_log_id=0):
         return self._service.get_snapshot(after_log_id)
+
+    def get_ai_settings(self):
+        return self._service.get_snapshot()["ai_settings"]
+
+    def update_ai_settings(self, provider, base_url=None, model=None):
+        return self._service.submit("update_ai_settings", provider, base_url, model)
+
+    def update_warning_settings(self, enabled, temp_rate, humidity_rate):
+        return self._service.submit("update_warning_settings", enabled, temp_rate, humidity_rate)
+
+    def mark_warning_read(self, event_id):
+        return self._service.submit("mark_warning_read", event_id)
+
+    def analyze_warning(self, event_id):
+        return self._service.submit("analyze_warning", event_id)
+
+    def set_warning_scenario(self, name):
+        return self._service.submit("set_warning_scenario", name)
+
+    def save_ai_config(self, provider, base_url, model, mode, api_key="", remember=True):
+        return self._service.submit("save_ai_config", provider, base_url, model, mode, api_key, remember)
+
+    def test_ai_connection(self):
+        return self._service.submit("test_ai_connection")
+
+    def monitor_trends(self):
+        return self._service.submit("monitor_trends")
