@@ -23,6 +23,7 @@ static uint8_t g_lora_tx_pending;
 static uint32_t g_lora_tx_enqueued_tick;
 static uint16_t g_lora_tx_mq2_age;
 static uint16_t g_lora_tx_ultrasonic_age;
+static uint16_t g_lora_tx_audio_age;
 static uint32_t g_lora_last_tx_tick;
 
 #define LORA_COMMAND_RETRY_COUNT 3U
@@ -309,6 +310,11 @@ void LoraP2PTX(void)
                                  ((uint16_t)g_lora_tx_frame[44] << 8U));
     g_lora_tx_ultrasonic_age = (uint16_t)((uint16_t)g_lora_tx_frame[51] |
                                        ((uint16_t)g_lora_tx_frame[52] << 8U));
+    if (message.type == LORA_MSG_TELEMETRY && message.payload_length == MAX4466_WIRE_SIZE) {
+      g_lora_tx_audio_age = Max4466Wire_U16(message.payload + MAX4466_WIRE_AGE_OFFSET);
+      g_lora_tx_mq2_age = Max4466Wire_U16(message.payload + MAX4466_WIRE_MQ_OFFSET + 6U);
+      g_lora_tx_ultrasonic_age = Max4466Wire_U16(message.payload + MAX4466_WIRE_US_OFFSET + 6U);
+    }
     g_lora_tx_pending = 1U;
   }
 
@@ -347,25 +353,34 @@ void LoraP2PTX(void)
   {
     uint32_t elapsed = HAL_GetTick() - g_lora_tx_enqueued_tick;
     uint16_t crc;
+    uint8_t shift = g_lora_tx_frame[10] == MAX4466_WIRE_SIZE ? 4U : 0U;
+    if (shift) {
+      if (g_lora_tx_audio_age >= 300U || elapsed >= 300U - g_lora_tx_audio_age) {
+        memset(g_lora_tx_frame + 11U + MAX4466_WIRE_SOUND_OFFSET, 0xFF, 12U);
+      } else {
+        uint16_t age = (uint16_t)(g_lora_tx_audio_age + elapsed);
+        g_lora_tx_frame[39] = (uint8_t)age; g_lora_tx_frame[40] = (uint8_t)(age >> 8U);
+      }
+    }
     if ((g_lora_tx_mq2_age >= LORA_TELEMETRY_MQ2_MAX_AGE_MS) ||
         (elapsed >= LORA_TELEMETRY_MQ2_MAX_AGE_MS - g_lora_tx_mq2_age))
-    { memset(&g_lora_tx_frame[37], 0xFF, 8U); }
+    { memset(&g_lora_tx_frame[37U + shift], 0xFF, 8U); }
     else
     {
       uint16_t age = (uint16_t)(g_lora_tx_mq2_age + elapsed);
-      g_lora_tx_frame[43] = (uint8_t)age;
-      g_lora_tx_frame[44] = (uint8_t)(age >> 8U);
+      g_lora_tx_frame[43U + shift] = (uint8_t)age;
+      g_lora_tx_frame[44U + shift] = (uint8_t)(age >> 8U);
     }
-    if (g_lora_tx_frame[10] == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE)
+    if (g_lora_tx_frame[10] == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE || shift)
     {
       if ((g_lora_tx_ultrasonic_age >= LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS) ||
           (elapsed >= LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS - g_lora_tx_ultrasonic_age))
-      { memset(&g_lora_tx_frame[45], 0xFF, 8U); }
+      { memset(&g_lora_tx_frame[45U + shift], 0xFF, 8U); }
       else
       {
         uint16_t age = (uint16_t)(g_lora_tx_ultrasonic_age + elapsed);
-        g_lora_tx_frame[51] = (uint8_t)age;
-        g_lora_tx_frame[52] = (uint8_t)(age >> 8U);
+        g_lora_tx_frame[51U + shift] = (uint8_t)age;
+        g_lora_tx_frame[52U + shift] = (uint8_t)(age >> 8U);
       }
     }
     crc = LoRaProtocol_Crc16(&g_lora_tx_frame[2],

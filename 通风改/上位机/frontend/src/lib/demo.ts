@@ -15,6 +15,28 @@ export class BrowserDemo implements DesktopAPI {
   private warningId = 0
   private manualId = 0
   private analysisGeneration = 0
+  async delete_warning(id: number): Promise<Accepted> {
+    this.state.warnings.events = this.state.warnings.events.filter(event => event.id !== id)
+    this.state.warnings.active_count = this.state.warnings.events.filter(event => ['active', 'unavailable'].includes(event.status)).length
+    this.state.revision++
+    return { accepted: true }
+  }
+  async delete_manual_trend(id: number): Promise<Accepted> {
+    if (this.state.warnings.manual?.id !== id) throw new Error('本次报告已变化')
+    this.state.warnings.manual = null; this.state.revision++
+    return { accepted: true }
+  }
+  async archive_manual_trend(id: number): Promise<Accepted> {
+    const report = this.state.warnings.manual
+    if (report?.id !== id) throw new Error('本次报告已变化')
+    if (report.analysis.status === 'pending') throw new Error('请等待分析完成')
+    if (!report.archive_id) {
+      report.archive_id = `preview-${id}`
+      this.state.warnings.archives = [structuredClone(report), ...(this.state.warnings.archives ?? [])].slice(0, 200)
+      this.state.revision++
+    }
+    return { accepted: true }
+  }
   constructor() {
     this.state.demo = true
     this.state.warnings.enabled = true
@@ -35,7 +57,7 @@ export class BrowserDemo implements DesktopAPI {
       this.state.window.status = '开窗启动PWM已确认（完成/停止状态未知）；ACK 不表示动作完成、自动停止成功或机械窗户到位。'
       this.state.telemetry = {
         values: { master_temp: '-3276.7 °C', slave_temp: '3276.7 °C', master_humidity: '6553.4 %', slave_humidity: '6553.4 %', master_pressure: '4294967294 Pa', slave_pressure: '4294967294 Pa' },
-        sounds: { sound_rms_1: '0', sound_rms_2: '4294967294' }, slave_link: '未知（旧布局）', updated_at: '2026-10-04 23:59:59', sample_id: ++this.sampleId,
+        sounds: { sound_rms_1: '--', sound_rms_2: '--', sound_p2p_1: '0', sound_p2p_2: '4095', sound_p2p_3: '2048', sound_p2p_4: '128', sound_p2p_5: '16' }, slave_link: '未知（旧布局）', updated_at: '2026-10-04 23:59:59', sample_id: ++this.sampleId,
         rain: { state: null, source: null },
         mq2: { valid: true, raw: 4095, pa7_mv: 3300, ao_mv: 6600, age_ms: 0 },
         ultrasonic: { valid: true, distance_mm: 500, raw_mm: 500, pulse_us: 2915, age_ms: 0 },
@@ -64,7 +86,7 @@ export class BrowserDemo implements DesktopAPI {
     this.mq2ReceivedAt = Date.now(); this.mq2SourceAge = 60
     this.state.telemetry = {
       values: { master_temp: '24.6 °C', slave_temp: '23.8 °C', master_humidity: '48.2 %', slave_humidity: '51.4 %', master_pressure: '101326 Pa', slave_pressure: '101284 Pa' },
-      sounds: { sound_rms_1: '0', sound_rms_2: '186' }, slave_link: '在线', updated_at: new Date().toLocaleTimeString('zh-CN', { hour12: false }), sample_id: ++this.sampleId,
+      sounds: { sound_rms_1: '--', sound_rms_2: '--', sound_p2p_1: '0', sound_p2p_2: '186', sound_p2p_3: '93', sound_p2p_4: '47', sound_p2p_5: '25' }, slave_link: '在线', updated_at: new Date().toLocaleTimeString('zh-CN', { hour12: false }), sample_id: ++this.sampleId,
       rain: { state: null, source: null },
       mq2: { valid: true, raw: Math.round(smokeMv / 3300 * 4095), pa7_mv: smokeMv, ao_mv: smokeMv * 2, age_ms: 60 },
       ultrasonic: { valid: true, distance_mm: 250, raw_mm: 252, pulse_us: 1469, age_ms: 60 },
@@ -186,7 +208,7 @@ export class BrowserDemo implements DesktopAPI {
     event.analysis = { status: 'pending', result: null, provider, model: this.state.ai_settings.profiles[provider].model, mode: 'simulation', data_source: 'demo' }
     this.state.revision++
     this.later(() => {
-      if (generation !== this.analysisGeneration) return
+      if (generation !== this.analysisGeneration || !this.state.warnings.events.includes(event)) return
       event.analysis.status = 'complete'; event.analysis.analyzed_at = new Date().toISOString()
       event.analysis.result = { summary: event.kind === 'communication' ? '遥测应答超时，环境状态未知。' : `实测趋势超过配置变化速度，建议检查现场条件。`, possible_causes: ['环境条件或测量状态变化'], suggested_checks: ['检查实测读数及设备通信状态'], limitations: '模拟解释，未调用 API；不能据此确定故障原因或粮食状态。' }
       this.state.revision++
@@ -257,7 +279,8 @@ export class BrowserDemo implements DesktopAPI {
     fan.duty = Math.floor(number + 0.5)
     fan.status = `等待确认 ${fan.duty}%`
     this.log(`演示风机 ${channel} 提交 ${fan.duty}%`)
-    this.later(() => { fan.status = `已确认 ${fan.duty}%`; this.state.revision++ })
+    const submitted = fan.duty
+    this.later(() => { if (!this.state.connected || fan.duty !== submitted) return; fan.status = `已确认 ${submitted}%`; fan.confirmed_duty = submitted; this.state.revision++ })
     return { accepted: true }
   }
   async set_window(action: number, servo_id = 1): Promise<Accepted> {

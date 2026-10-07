@@ -198,3 +198,8 @@
 - 验证：三板Keil构建及电脑侧算法/状态/协议/上位机测试；由用户配套烧录。接好跳线后检查DMA连续增长、上位机左右声音响应、无错误及BME/LoRa并行运行；本轮不能以编译成功替代实板验收。
 
 恢复流程依据 [ST ES096 §2.8.7](https://www.st.com/resource/en/errata_sheet/es096-stm32f101x8b-stm32f102x8b-and-stm32f103x8b-mediumdensity-device-limitations-stmicroelectronics.pdf)，补偿公式沿用参考工程的 Bosch 整数算法并修正负数左移和中间量溢出风险。
+# 2026-10-06：5 cm测距下限
+
+交付已完成：Keil Code=37040、RO=18372、RW=320、ZI=19488，0错误/0警告；HC-SR04 49/50/51 mm边界、ESP HTTP及内置网页回归通过。默认HEX与上述角色留档一致，SHA256 `F18B5E829821B9F4EE6D7B6FF50D15F087426B0BEB69BF8F4DBE56A18DF801D7`；HEX校验和、64 KiB范围、初始向量及解压网页与源码一致均通过。没有烧录或实物校准。
+
+用户已确认将HC-SR04有效范围改为50..500 mm，网页与上位机同步；帧布局、年龄、5次中位数及无线控制不变。仅修改最小距离参数，电脑替身测试覆盖49/50/51 mm边界，Keil构建并另存`LoraSlaveV1_slave_distance5cm_20261006`的HEX/ELF/map，保留历史产物，不自动烧录。此更新不表示实际安装距离已校准。

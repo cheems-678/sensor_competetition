@@ -145,6 +145,9 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
                 return ((message->payload[0] == 0x0BU) ||
                         (message->payload[0] == 0x0FU)) ? 1U : 0U;
             }
+            if (message->payload_length == MAX4466_WIRE_SIZE) {
+                return Max4466Wire_Validate(message->payload, message->payload_length);
+            }
             if ((message->payload_length == LORA_PROTOCOL_MQ2_TELEMETRY_BYTES) ||
                 (message->payload_length == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_BYTES))
             {
@@ -172,8 +175,8 @@ static uint8_t Gateway_IsValidPayload(const GatewayMessage *message)
                 }
                 if ((value[0] == 0xFFFFU) && (value[1] == 0xFFFFU) &&
                     (value[2] == 0xFFFFU) && (value[3] == 0xFFFFU)) { return 1U; }
-                return ((value[0] >= 100U) && (value[0] <= 500U) &&
-                        (value[1] >= 100U) && (value[1] <= 500U) &&
+                return ((value[0] >= 50U) && (value[0] <= 500U) &&
+                        (value[1] >= 50U) && (value[1] <= 500U) &&
                         (value[2] > 0U) && (value[2] < 10000U) && (value[3] < 2000U)) ? 1U : 0U;
             }
             if (message->payload_length == LORA_PROTOCOL_LEGACY_TELEMETRY_BYTES)

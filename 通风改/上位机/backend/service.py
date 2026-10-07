@@ -16,13 +16,15 @@ from .storage import TelemetryDatabase
 class ControllerService:
     def __init__(self, *, demo=False, db_path="sensor_data.db", database_factory: Callable = TelemetryDatabase,
                  serial_factory: Callable | None = None, port_provider: Callable | None = None,
-                 controller_factory: Callable = Controller, ai_store_factory: Callable | None = None):
+                 controller_factory: Callable = Controller, ai_store_factory: Callable | None = None,
+                 archive_store_factory: Callable | None = None):
         self._demo, self._db_path = bool(demo), ":memory:" if demo else db_path
         self._database_factory = database_factory
         self._serial_factory = DemoSerial if demo else serial_factory
         self._port_provider = (lambda: ["DEMO"]) if demo else port_provider
         self._controller_factory = controller_factory
         self._ai_store_factory = ai_store_factory
+        self._archive_store_factory = archive_store_factory
         self._commands: queue.Queue[tuple] = queue.Queue()
         self._lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
@@ -62,7 +64,8 @@ class ControllerService:
             controller = self._controller_factory(
                 database, serial_factory=self._serial_factory, port_provider=self._port_provider,
                 demo=self._demo, closing=self._closing.is_set,
-                **({"ai_store": self._ai_store_factory()} if self._ai_store_factory else {}))
+                **({"ai_store": self._ai_store_factory()} if self._ai_store_factory else {}),
+                **({"archive_store": self._archive_store_factory()} if self._archive_store_factory else {}))
             controller.refresh_ports()
             self._publish(controller)
             self._ready.set()
@@ -108,7 +111,8 @@ class ControllerService:
     def submit(self, method: str, *arguments) -> dict:
         if method not in ("refresh_ports", "connect", "disconnect", "read_once", "set_fan", "set_window",
                           "update_warning_settings", "update_ai_settings", "mark_warning_read", "analyze_warning", "set_warning_scenario",
-                          "save_ai_config", "test_ai_connection", "monitor_trends"):
+                          "save_ai_config", "test_ai_connection", "monitor_trends", "delete_warning",
+                          "delete_manual_trend", "archive_manual_trend"):
             raise ValueError("unsupported desktop command")
         with self._dispatch_lock:
             accepted = (not self._closing.is_set() and self._ready.is_set()
@@ -192,3 +196,12 @@ class DesktopAPI:
 
     def monitor_trends(self):
         return self._service.submit("monitor_trends")
+
+    def delete_warning(self, event_id):
+        return self._service.submit("delete_warning", event_id)
+
+    def delete_manual_trend(self, report_id):
+        return self._service.submit("delete_manual_trend", report_id)
+
+    def archive_manual_trend(self, report_id):
+        return self._service.submit("archive_manual_trend", report_id)

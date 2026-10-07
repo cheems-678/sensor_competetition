@@ -31,7 +31,7 @@ describe('independent smoke animation', () => {
     expect(screen.getByRole('img', { name: '烟雾指数不可用' })).toBeVisible()
     expect(scene).toHaveAttribute('data-density', '0')
     expect(scene).toHaveAttribute('data-running', 'false')
-    expect(screen.getByRole('status')).toHaveTextContent('数据不可用')
+    expect(screen.getByRole('status', { name: '烟雾预警状态' })).toHaveTextContent('数据不可用')
     rerender(<SmokeMonitor mq2={reading(2500)} connected={false} active />)
     expect(scene).toHaveAttribute('data-density', '0')
   })

@@ -1,6 +1,6 @@
 param([string]$OutputName = '智能通风系统_AI预警演示版')
 $ErrorActionPreference = 'Stop'
-if ($OutputName -notin @('智能通风系统_AI预警演示版','智能通风系统_AI接口版','智能通风系统_AI主动监测版','智能通风系统_AI主动监测版_两分钟')) { throw 'Unsupported output name.' }
+if ($OutputName -notin @('智能通风系统_AI预警演示版','智能通风系统_AI接口版','智能通风系统_AI主动监测版','智能通风系统_AI主动监测版_两分钟','智能通风系统_界面交互优化版_20261006','智能通风系统_三项预警版_20261006','智能通风系统_MAX4466五路版_20261007','智能通风系统_声学模型版_20261007')) { throw 'Unsupported output name.' }
 $warningProject = $PSScriptRoot
 $warningPython = Join-Path $warningProject '.venv\Scripts\python.exe'
 $warningOutput = Join-Path $warningProject ($OutputName + '.exe')

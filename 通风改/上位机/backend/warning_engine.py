@@ -19,6 +19,10 @@ class WarningEngine:
     GAP = 10.0
     CONFIRM = 30.0
     RECOVER = 60.0
+    NEAR_DISTANCE_MM = 100
+    DISTANCE_RECOVER_MM = 110
+    DISTANCE_RECOVER_SECONDS = 3.0
+    SMOKE_LIMIT = 10
 
     def __init__(self, enabled=False):
         self.enabled = bool(enabled)
@@ -31,6 +35,13 @@ class WarningEngine:
         self.recovery = {}
         self.metrics = {}
         self.connected = False
+        self.sensors = {
+            "rain": dict(source="master", kind="rain", state="unavailable", current=None, threshold=1, unit="状态", message="雨滴数据不可用"),
+            "smoke": dict(source="slave", kind="smoke", state="unavailable", current=None, threshold=self.SMOKE_LIMIT, unit="相对指数", message="烟雾数据不可用"),
+            "distance": dict(source="slave", kind="distance", state="unavailable", current=None, threshold=self.NEAR_DISTANCE_MM / 10, unit="cm", message="测距数据不可用"),
+        }
+        self._distance_recover_at = None
+        self._distance_last_at = None
 
     def _event(self, key):
         return next((item for item in reversed(self.events)
@@ -55,6 +66,9 @@ class WarningEngine:
                 event.update(status="stopped", ended_at=stamp)
         self.reset_window()
         self.connected = False
+        for sensor in self.sensors.values():
+            sensor.update(state="unavailable", current=None, message="已断开，数据不可用")
+        self._distance_recover_at = self._distance_last_at = None
 
     def reset_window(self):
         self._sample_id = -1
@@ -69,7 +83,7 @@ class WarningEngine:
             raise ValueError("检测开关必须为布尔值")
         if self.enabled != enabled:
             for event in self.events:
-                if event["kind"] != "communication" and event.get("trigger") != "manual" and event["status"] in ("active", "unavailable"):
+                if event["kind"] in ("temp", "humidity") and event.get("trigger") != "manual" and event["status"] in ("active", "unavailable"):
                     event.update(status="stopped", ended_at=stamp)
             self.candidate.clear()
             self.recovery.clear()
@@ -81,7 +95,7 @@ class WarningEngine:
             raise ValueError("变化速度必须为有限正数")
         if self.rates != {"temp": temp, "humidity": humidity}:
             for event in self.events:
-                if event["kind"] != "communication" and event["status"] in ("active", "unavailable"):
+                if event["kind"] in ("temp", "humidity") and event["status"] in ("active", "unavailable"):
                     event.update(status="stopped", ended_at=stamp)
             self.candidate.clear()
             self.recovery.clear()
@@ -91,6 +105,74 @@ class WarningEngine:
         if self.connected and self._event("communication") is None:
             self._create("communication", "link", "communication", stamp, now,
                          {"message": "遥测应答超时，当前环境状态未知"})
+
+    def _sensor_result(self, kind, key, stamp, now, current, abnormal, message, extra=None):
+        sensor = self.sensors[kind]
+        event = self._event(key)
+        if current is None:
+            sensor.update(state="unavailable", current=None, message=message)
+            if event:
+                event["status"] = "unavailable"
+            return
+        sensor.update(state="abnormal" if abnormal else "normal", current=current, message=message, observed_at=stamp)
+        evidence = {field: copy.deepcopy(sensor[field]) for field in ("current", "threshold", "unit", "message")}
+        evidence["trigger_value"] = event["evidence"].get("trigger_value", event["evidence"].get("current")) if event else current
+        evidence.update(detected_at=stamp, **(extra or {}))
+        if abnormal:
+            if event is None:
+                self._create(key, sensor["source"], kind, stamp, now, evidence)
+            else:
+                event.update(status="active", evidence=evidence)
+        elif event:
+            event.update(status="resolved", ended_at=stamp, evidence=evidence)
+
+    def observe_rain(self, rain_state, stamp, now):
+        valid = type(rain_state) is int and rain_state in (0, 1)
+        self._sensor_result("rain", "master_rain", stamp, now, rain_state if valid else None,
+                            rain_state == 1 if valid else False,
+                            "下雨（降雨提示）" if rain_state == 1 and valid else "无雨" if valid else "雨滴数据不可用",
+                            {"rain_state": rain_state if valid else None, "condition": "雨滴状态=1"})
+
+    def observe_smoke(self, index, stamp, now, pa7_mv=None, raw=None):
+        valid = type(index) in (int, float) and math.isfinite(index) and 0 <= index <= 100
+        self._sensor_result("smoke", "slave_smoke", stamp, now, index if valid else None,
+                            index > self.SMOKE_LIMIT if valid else False,
+                            "烟雾相对指数超限" if valid and index > self.SMOKE_LIMIT else "正常检测" if valid else "烟雾数据不可用",
+                            {"pa7_mv": pa7_mv, "raw": raw, "condition": "相对指数>10"})
+
+    def observe_distance(self, distance_mm, stamp, now):
+        event = self._event("slave_distance")
+        valid = type(distance_mm) in (int, float) and math.isfinite(distance_mm) and 50 <= distance_mm <= 500
+        if not valid:
+            self._distance_recover_at = self._distance_last_at = None
+            self._sensor_result("distance", "slave_distance", stamp, now, None, False, "测距数据不可用")
+            return
+        if self._distance_last_at is not None and (now < self._distance_last_at or now - self._distance_last_at >= 2):
+            self._distance_recover_at = None
+        self._distance_last_at = now
+        abnormal = distance_mm < self.NEAR_DISTANCE_MM
+        if event:
+            if distance_mm >= self.DISTANCE_RECOVER_MM:
+                if self._distance_recover_at is None:
+                    self._distance_recover_at = now
+                abnormal = now - self._distance_recover_at < self.DISTANCE_RECOVER_SECONDS
+            else:
+                self._distance_recover_at = None
+                abnormal = True
+        else:
+            self._distance_recover_at = None
+        message = "粮面距离过近" if abnormal else "正常检测"
+        if abnormal and distance_mm >= self.NEAR_DISTANCE_MM:
+            message = "粮面距离过近：等待≥11 cm连续有效3秒恢复"
+        self._sensor_result("distance", "slave_distance", stamp, now, distance_mm / 10, abnormal, message,
+                            {"distance_mm": distance_mm, "condition": "距离<10 cm",
+                             "recover_threshold": self.DISTANCE_RECOVER_MM / 10, "recover_seconds": self.DISTANCE_RECOVER_SECONDS})
+
+    def inspect_sensors(self):
+        states = [sensor["state"] for sensor in self.sensors.values()]
+        status = "abnormal" if "abnormal" in states else "unavailable" if all(s == "unavailable" for s in states) else "partial" if "unavailable" in states else "normal"
+        event_ids = [event["id"] for key in ("master_rain", "slave_smoke", "slave_distance") if (event := self._event(key))]
+        return dict(status=status, readings=copy.deepcopy(self.sensors), event_ids=event_ids)
 
     def expire(self, now):
         for key, series in self.series.items():
@@ -210,5 +292,7 @@ class WarningEngine:
 
     def snapshot(self):
         return copy.deepcopy(dict(enabled=self.enabled, rates=self.rates, metrics=self.metrics, window_seconds=self.WINDOW,
+                                  near_distance_mm=self.NEAR_DISTANCE_MM,
+                                  sensors=self.sensors,
                                   active_count=sum(e["status"] in ("active", "unavailable") for e in self.events),
                                   events=list(reversed(self.events))))

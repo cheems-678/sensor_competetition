@@ -7,6 +7,13 @@
    slave_protocol_runtime.c is separately compiled with its own HAL/lora stubs. */
 #include "lora_protocol.h"
 #include "master_runtime.h"
+#include "master_acoustic.h"
+uint8_t MasterAcoustic_GetSample(uint32_t now, MasterAcousticSample *sample)
+{
+    unsigned i;
+    for (i = 0U; i < 5U; i++) { sample->peak_to_peak[i] = (uint16_t)(100U * i); }
+    sample->tick = now - 7U; return 1U;
+}
 #include "master_queues.h"
 #include "master_bme280.h"
 #include "master_rain.h"
@@ -239,14 +246,14 @@ static uint32_t read_u32(const uint8_t *data)
 static void check_telemetry(uint16_t flow)
 {
     CHECK(last_pc.type == LORA_MSG_TELEMETRY && last_pc.flow_id == flow);
-    CHECK(last_pc.payload_length == 42U && last_pc.payload[0] == 0x3FU);
+    CHECK(last_pc.payload_length == 46U && last_pc.payload[0] == 0x77U);
     CHECK(last_pc.payload[1] == 201U && last_pc.payload[2] == 0U);
     CHECK(read_u32(&last_pc.payload[5]) == 101101U);
     CHECK(last_pc.payload[9] == 123U && last_pc.payload[10] == 0U);
     CHECK(last_pc.payload[11] == 0xC8U && last_pc.payload[12] == 1U);
     CHECK(read_u32(&last_pc.payload[13]) == 100123U);
     CHECK(last_pc.payload[17] == 0xFFU);
-    CHECK(read_u32(&last_pc.payload[18]) == 321U && read_u32(&last_pc.payload[22]) == 654U);
+    CHECK(Max4466Wire_U16(last_pc.payload+18U)==0U && Max4466Wire_U16(last_pc.payload+26U)==400U);
 }
 static void normal_chain(void)
 {
@@ -330,8 +337,8 @@ static void rain_telemetry_chain(void)
             command(LORA_MSG_READ_TELEMETRY, flow, 0U);
             advance(online ? 50U : 500U);
             CHECK(pc_count == 1U && last_pc.type == LORA_MSG_TELEMETRY);
-            CHECK(last_pc.flow_id == flow && last_pc.payload_length == 42U);
-            CHECK(last_pc.payload[0] == (online ? 0x3FU : 0x3BU));
+            CHECK(last_pc.flow_id == flow && last_pc.payload_length == 46U);
+            CHECK(last_pc.payload[0] == (online ? 0x77U : 0x73U));
             CHECK(last_pc.payload[17] == rain);
             CHECK(last_pc.payload[1] == 201U && last_pc.payload[2] == 0U);
             CHECK(read_u32(&last_pc.payload[5]) == 101101U);
@@ -339,16 +346,16 @@ static void rain_telemetry_chain(void)
             {
                 CHECK(last_pc.payload[9] == 123U && last_pc.payload[10] == 0U);
                 CHECK(read_u32(&last_pc.payload[13]) == 100123U);
-                CHECK(read_u32(&last_pc.payload[18]) == 321U);
-                CHECK(read_u32(&last_pc.payload[22]) == 654U);
+                CHECK(Max4466Wire_U16(last_pc.payload+18U)==0U);
+                CHECK(Max4466Wire_U16(last_pc.payload+26U)==400U);
             }
             else
             {
                 CHECK(last_pc.payload[9] == 0U && last_pc.payload[10] == 0x80U);
                 CHECK(last_pc.payload[11] == 0xFFU && last_pc.payload[12] == 0xFFU);
                 CHECK(read_u32(&last_pc.payload[13]) == 0xFFFFFFFFU);
-                CHECK(read_u32(&last_pc.payload[18]) == 0xFFFFFFFFU);
-                CHECK(read_u32(&last_pc.payload[22]) == 0xFFFFFFFFU);
+                CHECK(Max4466Wire_U16(last_pc.payload+18U)==0U);
+                CHECK(Max4466Wire_U16(last_pc.payload+26U)==400U);
             }
             CHECK(pwm_pulse == 1500U && pwm_updates == 0U);
         }
@@ -444,17 +451,17 @@ static void mq2_chain(void)
     reset(100U); mq2_valid = 1U; SlaveMq2Diag.valid = 1U;
     command(LORA_MSG_READ_TELEMETRY, 900U, 0U); advance(50U);
     check_telemetry(900U);
-    CHECK(last_pc.payload[26] == (uint8_t)1241U && last_pc.payload[27] == (uint8_t)(1241U >> 8U));
-    CHECK(last_pc.payload[28] == (uint8_t)1000U && last_pc.payload[30] == (uint8_t)2000U);
-    age = (uint16_t)(last_pc.payload[32] | ((uint16_t)last_pc.payload[33] << 8U));
+    CHECK(last_pc.payload[30] == (uint8_t)1241U && last_pc.payload[31] == (uint8_t)(1241U >> 8U));
+    CHECK(last_pc.payload[32] == (uint8_t)1000U && last_pc.payload[34] == (uint8_t)2000U);
+    age = (uint16_t)(last_pc.payload[36] | ((uint16_t)last_pc.payload[37] << 8U));
     CHECK(age == 50U);
     advance(1950U); command(LORA_MSG_READ_TELEMETRY, 901U, 0U); advance(50U);
-    CHECK(last_pc.flow_id == 901U && last_pc.payload[0] == 0x3FU);
-    CHECK(memcmp(&last_pc.payload[26], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
+    CHECK(last_pc.flow_id == 901U && last_pc.payload[0] == 0x77U);
+    CHECK(memcmp(&last_pc.payload[30], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
     CHECK(last_pc.payload[9] == 123U); /* MQ expiry leaves BME available. */
     reset(0xFFFFFFF0U); mq2_valid = 1U; SlaveMq2Diag.valid = 1U;
     command(LORA_MSG_READ_TELEMETRY, 902U, 0U); advance(50U);
-    CHECK(last_pc.flow_id == 902U && last_pc.payload[32] == 50U && last_pc.payload[33] == 0U);
+    CHECK(last_pc.flow_id == 902U && last_pc.payload[36] == 50U && last_pc.payload[37] == 0U);
     puts("PASS MQ2 real three-board encoding/forwarding, independent expiry and tick wrap");
 }
 
@@ -491,20 +498,20 @@ static void ultrasonic_chain(void)
     ultrasonic_sample.raw_mm=252U; ultrasonic_sample.pulse_us=1469U;
     command(LORA_MSG_READ_TELEMETRY,980U,0U); advance(50U);
     check_telemetry(980U);
-    CHECK(last_pc.payload[34]==250U && last_pc.payload[36]==252U);
-    CHECK((last_pc.payload[38]|((uint16_t)last_pc.payload[39]<<8U))==1469U);
-    CHECK(last_pc.payload[40]==50U && last_pc.payload[41]==0U);
+    CHECK(last_pc.payload[38]==250U && last_pc.payload[40]==252U);
+    CHECK((last_pc.payload[42]|((uint16_t)last_pc.payload[43]<<8U))==1469U);
+    CHECK(last_pc.payload[44]==50U && last_pc.payload[45]==0U);
     advance(1950U); command(LORA_MSG_READ_TELEMETRY,981U,0U); advance(50U);
-    CHECK(memcmp(last_pc.payload+34U,"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",8U)==0);
+    CHECK(memcmp(last_pc.payload+38U,"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",8U)==0);
     CHECK(last_pc.payload[9]==123U);
     SlaveHcsr04Diag.valid=1U; ultrasonic_sample.tick=tick;
     command(LORA_MSG_READ_TELEMETRY,982U,0U); advance(50U);
-    CHECK(last_pc.payload[34]==250U);
+    CHECK(last_pc.payload[38]==250U);
     SlaveHcsr04Diag.valid=0U; command(LORA_MSG_READ_TELEMETRY,983U,0U); advance(50U);
-    CHECK(last_pc.payload[34]==255U && last_pc.payload[35]==255U);
+    CHECK(last_pc.payload[38]==255U && last_pc.payload[39]==255U);
     reset(0xFFFFFFF0U); SlaveHcsr04Diag.valid=1U; ultrasonic_sample.tick=tick;
     command(LORA_MSG_READ_TELEMETRY,984U,0U); advance(50U);
-    CHECK(last_pc.payload[40]==50U && last_pc.payload[34]==250U);
+    CHECK(last_pc.payload[44]==50U && last_pc.payload[38]==250U);
     puts("PASS ultrasonic real three-board measurements/fault/expiry/recovery/wrap");
 }
 

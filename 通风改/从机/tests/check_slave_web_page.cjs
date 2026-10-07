@@ -190,6 +190,11 @@ async function check() {
   vm.runInContext('updateDistance(testUltrasonic,0)',context);
   assert.equal(get('distance').textContent,'29.9');assert.equal(get('distanceRaw').textContent,'30.0');
   assert.equal(get('distancePulse').textContent,'1749');
+  vm.runInContext('updateDistance({...testUltrasonic,distance_mm:50,raw_mm:50,pulse_us:292},0)',context);
+  assert.equal(get('distance').textContent,'5.0','5 cm is accepted');
+  vm.runInContext('updateDistance({...testUltrasonic,distance_mm:49,raw_mm:49,pulse_us:285},0)',context);
+  assert.equal(get('distance').textContent,'--','below 5 cm remains unavailable');
+  vm.runInContext('updateDistance(testUltrasonic,0)',context);
   step(1899);assert.equal(get('distance').textContent,'29.9');
   step(1);assert.equal(get('distance').textContent,'--');
   vm.runInContext('updateDistance(testUltrasonic,0)',context);

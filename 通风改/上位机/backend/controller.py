@@ -15,6 +15,8 @@ from .warning_engine import WarningEngine, PROVIDERS
 from .warning_service import ExplanationWorker
 from .ai_client import validate_profile, validate_key
 from .ai_config import MemoryAIStore, AIConfigError
+from .trend_archive import MemoryTrendArchive
+from .smoke_index import smoke_index
 from urllib.parse import urlsplit
 
 try:
@@ -47,7 +49,7 @@ class Controller:
         ("master_pressure", "master_bme_pressure_pa", "Pa"),
         ("slave_pressure", "slave_bme_pressure_pa", "Pa"),
     )
-    SOUND_KEYS = ("sound_rms_1", "sound_rms_2")
+    SOUND_KEYS = ("sound_rms_1", "sound_rms_2") + tuple(f"sound_p2p_{i}" for i in range(1, 6))
 
     def __init__(
         self,
@@ -61,6 +63,7 @@ class Controller:
         start_readers: bool = True,
         closing: Callable | None = None,
         ai_store=None,
+        archive_store=None,
     ):
         self.database = database
         self.serial_factory = serial_factory if serial_factory is not None else (
@@ -94,6 +97,7 @@ class Controller:
         self.duties = {channel: 0 for channel in self.FAN_PINS}
         self.fan_status = {channel: "未发送" for channel in self.FAN_PINS}
         self.fan_pending = {}
+        self.fan_confirmed = {channel: None for channel in self.FAN_PINS}
         self.telemetry_pending = None
         self.window_queued_action = None
         self.window_pending = None
@@ -117,6 +121,13 @@ class Controller:
         self.ai_test = dict(status="idle", message="", provider=None, model=None)
         self._ai_test_token = None
         self.manual_trend = None
+        self._archive_store = archive_store or MemoryTrendArchive()
+        self.archive_error = ""
+        try:
+            self.archives = self._archive_store.load()
+        except (OSError, ValueError, KeyError, TypeError):
+            self.archives = []
+            self.archive_error = "本地档案读取失败，请检查档案文件；已有文件未覆盖。"
         self._manual_token = None
         self._ai_values = {key: None for key in ("master_temp", "slave_temp", "master_humidity", "slave_humidity")}
         self._load_ai_config()
@@ -282,6 +293,43 @@ class Controller:
         event["read"] = True
         self._changed()
 
+    def delete_warning(self, event_id):
+        event = self._warning_event(event_id)
+        token = self._analysis_tokens.pop(event_id, None)
+        if token is not None:
+            self.explanations.cancel([token])
+        self.warning_engine.events.remove(event)
+        self.warning_engine.candidate.pop(event["key"], None)
+        self.warning_engine.recovery.pop(event["key"], None)
+        self._changed()
+
+    def _manual_report(self, report_id):
+        if type(report_id) is not int or self.manual_trend is None or self.manual_trend["id"] != report_id:
+            raise ValueError("本次报告已变化，请重新操作")
+        return self.manual_trend
+
+    def delete_manual_trend(self, report_id):
+        self._manual_report(report_id)
+        if self._manual_token is not None:
+            self.explanations.cancel([self._manual_token])
+        self._manual_token = None
+        self.manual_trend = None
+        self._changed()
+
+    def archive_manual_trend(self, report_id):
+        report = self._manual_report(report_id)
+        if report["analysis"]["status"] == "pending":
+            raise ValueError("请等待分析完成再记录到档案")
+        if report.get("archive_id"):
+            return
+        if self.archive_error:
+            raise ValueError(self.archive_error)
+        record = self._archive_store.save(report)
+        report["archive_id"] = record["archive_id"]
+        self.archives.insert(0, record)
+        self.archives = self.archives[:200]
+        self._changed()
+
     def _warning_event(self, event_id):
         if type(event_id) is not int:
             raise ValueError("事件编号无效")
@@ -311,16 +359,21 @@ class Controller:
     def monitor_trends(self):
         if self._manual_token is not None:
             return
+        self._refresh_mq2(self.clock())
+        self._refresh_ultrasonic(self.clock())
+        self._check_sensor_warnings(self.clock(), self._warning_stamp())
         report = self.warning_engine.inspect(self.clock(), self._warning_stamp(),
                                             (self.serial_port is not None and self.last_telemetry_at is not None)
                                             or (self.demo and self.warning_engine.connected))
+        report["sensor_review"] = self.warning_engine.inspect_sensors()
+        report["event_ids"] = list(dict.fromkeys(report["event_ids"] + report["sensor_review"]["event_ids"]))
         self._analysis_sequence += 1
         report.update(id=self._analysis_sequence, data_source="demo" if self.demo else "telemetry",
                       analysis=dict(status="idle", result=None, provider=self.ai_settings["provider"],
                                     model=self.ai_settings["profiles"][self.ai_settings["provider"]]["model"],
                                     mode=self.ai_mode, data_source="demo" if self.demo else "telemetry"))
         self.manual_trend = report
-        if report["status"] == "unavailable":
+        if report["status"] == "unavailable" and report["sensor_review"]["status"] == "unavailable":
             report["analysis"].update(status="error", result={"error": "没有可用数据，未请求AI；请先确认实测读数。"})
             self._changed()
             return
@@ -332,7 +385,7 @@ class Controller:
             return
         token = (-1, self.connection_generation, self._ai_revision, self._analysis_sequence)
         evidence = dict(kind="trend_review", purpose="manual_trend_review", evidence=copy.deepcopy({
-            key: report[key] for key in ("checked_at", "status", "message", "channels", "event_ids")}))
+            key: report[key] for key in ("checked_at", "status", "message", "channels", "event_ids", "sensor_review")}))
         if self.explanations.submit(token, evidence, config, self._analysis_context()):
             self._manual_token = token
             report["analysis"]["status"] = "pending"
@@ -474,6 +527,7 @@ class Controller:
         self._clear_telemetry()
         for channel in self.fan_status:
             self.fan_status[channel] = "已断开，状态未知"
+            self.fan_confirmed[channel] = None
         self.stop_event.set()
         self.connection_generation += 1
         port, self.serial_port = self.serial_port, None
@@ -530,6 +584,9 @@ class Controller:
         self.slave_link = "从机链路：未知"
         self.last_telemetry_at = None
         self.updated_at = None
+        self.warning_engine.observe_distance(None, self._warning_stamp(), self.clock())
+        self.warning_engine.observe_smoke(None, self._warning_stamp(), self.clock())
+        self.warning_engine.observe_rain(None, self._warning_stamp(), self.clock())
         self._changed()
 
     @staticmethod
@@ -543,6 +600,7 @@ class Controller:
         if age >= LoRaProtocol.MQ2_MAX_AGE_MS:
             self.mq2 = self._empty_mq2()
             self._mq2_received_at = self._mq2_source_age = None
+            self.warning_engine.observe_smoke(None, self._warning_stamp(), now)
             self._changed()
         elif age != self.mq2["age_ms"]:
             self.mq2["age_ms"] = age
@@ -559,6 +617,7 @@ class Controller:
         if age >= LoRaProtocol.ULTRASONIC_MAX_AGE_MS:
             self.ultrasonic = self._empty_ultrasonic()
             self._ultrasonic_received_at = self._ultrasonic_source_age = None
+            self.warning_engine.observe_distance(None, self._warning_stamp(), now)
             self._changed()
         elif age != self.ultrasonic["age_ms"]:
             self.ultrasonic["age_ms"] = age
@@ -566,6 +625,16 @@ class Controller:
 
     def read_once(self):
         self._request_telemetry(True)
+
+    def _check_sensor_warnings(self, now, stamp):
+        available = self.serial_port is not None or (self.demo and self.warning_engine.connected)
+        rain = self.rain["state"] if available and self.rain["source"] == "master" else None
+        mq = self.mq2
+        index = smoke_index(mq["pa7_mv"]) if available and mq["valid"] and mq["age_ms"] is not None and mq["age_ms"] < 2000 else None
+        distance = self.ultrasonic["distance_mm"] if available and self.ultrasonic["valid"] and self.ultrasonic["age_ms"] is not None and self.ultrasonic["age_ms"] < 2000 else None
+        self.warning_engine.observe_rain(rain, stamp, now)
+        self.warning_engine.observe_smoke(index, stamp, now, mq["pa7_mv"] if index is not None else None, mq["raw"] if index is not None else None)
+        self.warning_engine.observe_distance(distance, stamp, now)
 
     def _request_telemetry(self, force_resample: bool = True):
         if self._window_busy():
@@ -709,6 +778,7 @@ class Controller:
             if self.clock() - sent_at >= self.FAN_ACK_TIMEOUT_S:
                 del self.fan_pending[flow]
                 self.fan_status[channel] = f"{duty}% 确认超时"
+                self.fan_confirmed[channel] = None
                 self._changed()
         now = self.clock()
         self._refresh_mq2(now)
@@ -756,11 +826,12 @@ class Controller:
             self.warning_engine.observe(self.sample_id, now, self._warning_stamp(),
                                         {key: values[name] for key, name, _ in self.FIELD_LABELS
                                          if key.endswith(("temp", "humidity"))})
+            self._check_sensor_warnings(now, self._warning_stamp())
             for key, name, unit in self.FIELD_LABELS:
                 value = values[name]
                 self.values[key] = "--" if value is None else f"{value:g} {unit}"
             for key in self.SOUND_KEYS:
-                value = values[key] if len(packet["data"]) in (LoRaProtocol.TELEMETRY_SIZE, LoRaProtocol.MQ2_TELEMETRY_SIZE, LoRaProtocol.ULTRASONIC_TELEMETRY_SIZE) else None
+                value = values.get(key)
                 self.sounds[key] = "--" if value is None else str(value)
             self._changed()
         elif packet["type"] == LoRaProtocol.MSG_ACK:
@@ -783,6 +854,7 @@ class Controller:
                 pending = self.fan_pending.pop(packet["flow_id"], None)
                 if pending is not None:
                     channel, duty, _ = pending
+                    self.fan_confirmed[channel] = duty if packet["data"][1] == 0 else None
                     self.fan_status[channel] = (
                         f"已确认 {duty}%" if packet["data"][1] == 0 else "主机拒绝执行")
                     self._changed()
@@ -800,12 +872,16 @@ class Controller:
             pending = self.fan_pending.pop(packet["flow_id"], None)
             if pending is not None:
                 self.fan_status[pending[0]] = f"失败 code={packet['data'][0]}"
+                self.fan_confirmed[pending[0]] = None
                 self._changed()
 
     def snapshot(self, after_log_id: int = 0) -> dict:
         busy = self._window_busy()
         warnings = self.warning_engine.snapshot()
         warnings["manual"] = copy.deepcopy(self.manual_trend)
+        warnings["archives"] = copy.deepcopy(self.archives)
+        warnings["archive_persistent"] = self._archive_store.persistent
+        warnings["archive_error"] = self.archive_error
         return {
             "revision": self.revision, "demo": self.demo,
             "warnings": warnings, "ai_settings": self._public_ai_settings(),
@@ -819,7 +895,7 @@ class Controller:
                           "slave_link": self.slave_link, "updated_at": self.updated_at,
                           "sample_id": self.sample_id},
             "fans": [{"channel": ch, "pin": pin, "duty": self.duties[ch],
-                      "status": self.fan_status[ch]} for ch, pin in self.FAN_PINS.items()],
+                      "status": self.fan_status[ch], "confirmed_duty": self.fan_confirmed[ch]} for ch, pin in self.FAN_PINS.items()],
             "window": {"busy": busy, "status": self.window_status},
             "windows": [{"channel": ch, "pin": pin, "status": self.window_statuses[ch]}
                         for ch, pin in self.SERVO_PINS.items()],

@@ -7,7 +7,7 @@ import type { Field } from '../lib/types'
 const metrics = [
   { id: 'temp', label: '温度', unit: '°C', padding: .5 },
   { id: 'humidity', label: '湿度', unit: '%', padding: 1 },
-  { id: 'pressure', label: '气压', unit: 'Pa', padding: 10 },
+  { id: 'pressure', label: '气压', unit: 'kPa', padding: 10 },
 ] as const
 const sides = [{ id: 'master', label: '主机' }, { id: 'slave', label: '从机' }] as const
 const stamp = (at: number) => new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
@@ -44,7 +44,7 @@ export const EnvironmentTrend = memo(function EnvironmentTrend({ points, connect
         onPointerMove={event => { const rect = event.currentTarget.getBoundingClientRect(); selectNearest(start + ((event.clientX - rect.left) / rect.width * 860 - plotLeft) / plotWidth * (end - start)) }}
         onPointerLeave={() => setSelectedAt(null)} onBlur={() => setSelectedAt(null)}
         onKeyDown={event => { if (!points.length || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const index = selected ? points.indexOf(selected) : points.length - 1; const next = event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, index + (event.key === 'ArrowLeft' ? -1 : 1))); setSelectedAt(points[next].at) }}>
-        {Array.from({ length: 5 }, (_, index) => { const value = bottom + index / 4 * (top - bottom), height = y(value); return <g key={index} className="trend-grid"><line x1={plotLeft} x2="826" y1={height} y2={height} />{available && <text x={plotLeft - 12} y={height + 4} textAnchor="end">{tickLabel(metricId === 'pressure' ? Math.round(value) : Number(value.toFixed(1)))}</text>}</g> })}
+        {Array.from({ length: 5 }, (_, index) => { const value = bottom + index / 4 * (top - bottom), height = y(value); return <g key={index} className="trend-grid"><line x1={plotLeft} x2="826" y1={height} y2={height} />{available && <text x={plotLeft - 12} y={height + 4} textAnchor="end">{tickLabel(metricId === 'pressure' ? Number((value / 1000).toFixed(2)) : Number(value.toFixed(1)))}</text>}</g> })}
         {points.length > 0 && Array.from({ length: 4 }, (_, index) => { const at = start + index / 3 * (end - start); return <text className="trend-time" key={index} x={x(at)} y="267" textAnchor={index === 0 ? 'start' : index === 3 ? 'end' : 'middle'}>{stamp(at)}</text> })}
         {available && sides.map((side, index) => <g key={side.id} className={`trend-series ${side.id}`}>
           <path d={linePath(points, fields[index], x, y)} fill="none" vectorEffect="non-scaling-stroke" />
@@ -54,7 +54,7 @@ export const EnvironmentTrend = memo(function EnvironmentTrend({ points, connect
       </svg>
       {!available && <div className="trend-empty" role="status">{points.length ? `暂无有效${metric.label}数据` : connected ? '等待有效遥测' : '连接后显示曲线'}</div>}
     </div>
-    <div className="trend-reading" aria-label="曲线读数"><time>{selected ? stamp(selected.at) : '--'}</time>{sides.map((side, index) => <span key={side.id} className={side.id}>{side.label}<strong>{selected?.values[fields[index]] == null ? '--' : selected.values[fields[index]]!.toLocaleString('zh-CN', { maximumFractionDigits: metricId === 'pressure' ? 0 : 1 })}</strong>{metric.unit}</span>)}</div>
+    <div className="trend-reading" aria-label="曲线读数"><time>{selected ? stamp(selected.at) : '--'}</time>{sides.map((side, index) => <span key={side.id} className={side.id}>{side.label}<strong>{selected?.values[fields[index]] == null ? '--' : (selected.values[fields[index]]! / (metricId === 'pressure' ? 1000 : 1)).toLocaleString('zh-CN', { minimumFractionDigits: metricId === 'pressure' ? 1 : 0, maximumFractionDigits: 1 })}</strong>{metric.unit}</span>)}</div>
     <HelpDetails><p>记录本次连接最近 10 分钟的遥测，横轴为上位机接收时间；最多保留 1200 个观测点。无效数据留断点，断线保留最后曲线，重连清空；不读取历史数据库。</p><p>鼠标移到曲线上查看读数；聚焦曲线后用左右方向键切换观测点，Home/End 查看首末点。</p></HelpDetails>
   </section>
 })

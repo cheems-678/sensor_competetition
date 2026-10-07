@@ -664,6 +664,14 @@ class RainDisplayTests(unittest.TestCase):
         self.assertEqual(self.app.rain_var.get(), "--")
 
 
+def analog_payload(left=1234, right=987, flags=0x77):
+    values = (left, right, left, right, left, 50)
+    if left == 0xFFFFFFFF and right == 0xFFFFFFFF:
+        values = (65535,) * 6
+    return struct.pack("<BhHIhHIB6H8H", flags, 236, 478, 101325,
+                       242, 513, 100982, 255, *values, *((65535,) * 8))
+
+
 class AcousticDisplayTests(unittest.TestCase):
     setUp = TelemetryPollingTests.setUp
 
@@ -672,34 +680,34 @@ class AcousticDisplayTests(unittest.TestCase):
         self.app._handle_frame(telemetry_frame(flow=flow, payload=payload))
 
     def test_acoustic_labels_describe_latest_window_and_query_interval(self):
-        self.assertIn("最新短窗声音幅度", UPPER.MonitorApp.SOUND_SECTION_TITLE)
-        self.assertIn("RMS", UPPER.MonitorApp.SOUND_SECTION_TITLE)
-        self.assertIn("约63.7 ms完整采样窗", UPPER.MonitorApp.SOUND_HELP_TEXT)
+        self.assertIn("最新短窗峰峰值", UPPER.MonitorApp.SOUND_SECTION_TITLE)
+        self.assertIn("MAX4466五路", UPPER.MonitorApp.SOUND_SECTION_TITLE)
+        self.assertIn("约54 ms最新窗口", UPPER.MonitorApp.SOUND_HELP_TEXT)
         self.assertIn("界面约每秒查询一次", UPPER.MonitorApp.SOUND_HELP_TEXT)
-        self.assertIn("PCM 计数，不是分贝", UPPER.MonitorApp.SOUND_HELP_TEXT)
+        self.assertIn("ADC计数，不是分贝", UPPER.MonitorApp.SOUND_HELP_TEXT)
         for text in (UPPER.MonitorApp.SOUND_SECTION_TITLE, UPPER.MonitorApp.SOUND_HELP_TEXT):
-            self.assertNotIn("最大值", text)
-            self.assertNotIn("峰值", text)
+            self.assertNotIn("最大RMS", text)
+            self.assertIn("峰峰值", text)
         self.assertEqual(UPPER.MonitorApp.TELEMETRY_POLL_INTERVAL_S, 1.0)
 
     def test_matching_short_windows_replace_high_values_with_low_and_zero(self):
-        samples = ((123456, 98765), (77, 33), (0, 0))
+        samples = ((1234, 987), (77, 33), (0, 0))
         for flow, (left, right) in enumerate(samples, start=1):
             with self.subTest(flow=flow):
                 with patch.object(UPPER.time, "monotonic", return_value=99.0 + flow):
-                    self.receive(acoustic_payload(left=left, right=right), flow=flow)
-                self.assertEqual(self.app.sound_vars["sound_rms_1"].get(), str(left))
-                self.assertEqual(self.app.sound_vars["sound_rms_2"].get(), str(right))
+                    self.receive(analog_payload(left=left, right=right), flow=flow)
+                self.assertEqual(self.app.sound_vars["sound_p2p_1"].get(), str(left))
+                self.assertEqual(self.app.sound_vars["sound_p2p_2"].get(), str(right))
                 self.assertEqual(self.app.last_telemetry_at, 99.0 + flow)
                 self.assertIsNone(self.app.telemetry_pending)
-        saved = [(call.args[1]["sound_rms_1"], call.args[1]["sound_rms_2"])
+        saved = [(call.args[1]["sound_p2p_1"], call.args[1]["sound_p2p_2"])
                  for call in self.app.database.insert.call_args_list]
         self.assertEqual(saved, list(samples))
 
     def test_old_flow_and_timeout_cannot_restore_larger_short_window(self):
-        larger = acoustic_payload(left=123456, right=98765)
+        larger = analog_payload(left=1234, right=987)
         self.receive(larger, flow=1)
-        self.receive(acoustic_payload(left=0, right=0), flow=2)
+        self.receive(analog_payload(left=0, right=0), flow=2)
         self.app.telemetry_pending = (3, 100.0)
         self.app._handle_frame(telemetry_frame(flow=1, payload=larger))
         self.assertEqual(self.app.telemetry_pending, (3, 100.0))
@@ -714,45 +722,45 @@ class AcousticDisplayTests(unittest.TestCase):
         self.assertEqual(self.app.database.insert.call_count, 2)
 
     def test_integer_zero_sentinel_and_legacy_display(self):
-        self.receive(acoustic_payload(left=0, right=123456))
-        self.assertEqual(self.app.sound_vars["sound_rms_1"].get(), "0")
-        self.assertEqual(self.app.sound_vars["sound_rms_2"].get(), "123456")
-        self.receive(acoustic_payload(left=0xFFFFFFFF, right=0xFFFFFFFF))
+        self.receive(analog_payload(left=0, right=1234))
+        self.assertEqual(self.app.sound_vars["sound_p2p_1"].get(), "0")
+        self.assertEqual(self.app.sound_vars["sound_p2p_2"].get(), "1234")
+        self.receive(analog_payload(left=0xFFFFFFFF, right=0xFFFFFFFF))
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
         self.receive(dual_bme_payload())
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
         self.receive(master_bme_payload(flags=0))
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
 
-    def test_offline_clears_sound_without_clearing_master_bme(self):
-        self.receive(acoustic_payload())
-        self.receive(acoustic_payload(flags=0x0B))
-        self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
+    def test_slave_offline_keeps_master_sound_and_bme(self):
+        self.receive(analog_payload())
+        self.receive(analog_payload(flags=0x73))
+        self.assertEqual(self.app.sound_vars["sound_p2p_1"].get(), "1234")
         self.assertEqual(self.app.value_vars["master_bme_pressure_pa"].get(), "101325 Pa")
         self.assertEqual(self.app.slave_link_var.get(), "从机链路：离线")
 
     def test_wrong_flow_late_and_duplicate_frames_only_log(self):
         self.app.telemetry_pending = (10, 100.0)
         values_before = {key: value.get() for key, value in self.app.sound_vars.items()}
-        self.app._handle_frame(telemetry_frame(flow=9, payload=acoustic_payload()))
+        self.app._handle_frame(telemetry_frame(flow=9, payload=analog_payload()))
         self.assertEqual(self.app.telemetry_pending, (10, 100.0))
         self.assertEqual({key: value.get() for key, value in self.app.sound_vars.items()}, values_before)
         self.assertEqual(self.app.last_telemetry_at, 99.0)
         self.app.database.insert.assert_not_called()
         with patch.object(UPPER.time, "monotonic", return_value=101.0):
-            self.app._handle_frame(telemetry_frame(flow=10, payload=acoustic_payload()))
+            self.app._handle_frame(telemetry_frame(flow=10, payload=analog_payload()))
         self.assertEqual(self.app.last_telemetry_at, 101.0)
         self.assertIsNone(self.app.telemetry_pending)
-        self.app._handle_frame(telemetry_frame(flow=10, payload=acoustic_payload(left=77)))
+        self.app._handle_frame(telemetry_frame(flow=10, payload=analog_payload(left=77)))
         self.assertEqual(self.app.last_telemetry_at, 101.0)
-        self.assertEqual(self.app.sound_vars["sound_rms_1"].get(), "123456")
+        self.assertEqual(self.app.sound_vars["sound_p2p_1"].get(), "1234")
         self.app.database.insert.assert_called_once()
         self.assertEqual(self.app._append_log.call_count, 3)
 
     def test_matching_flow_at_deadline_cannot_restore_stale_values(self):
         self.app.telemetry_pending = (10, 100.0)
         with patch.object(UPPER.time, "monotonic", return_value=105.0):
-            self.app._handle_frame(telemetry_frame(flow=10, payload=acoustic_payload()))
+            self.app._handle_frame(telemetry_frame(flow=10, payload=analog_payload()))
         self.assertIsNone(self.app.telemetry_pending)
         self.assertIsNone(self.app.last_telemetry_at)
         self.assertEqual(self.app.next_telemetry_poll_at, 106.0)
@@ -764,26 +772,26 @@ class AcousticDisplayTests(unittest.TestCase):
     def test_matching_flow_before_deadline_is_accepted(self):
         self.app.telemetry_pending = (10, 100.0)
         with patch.object(UPPER.time, "monotonic", return_value=104.999):
-            self.app._handle_frame(telemetry_frame(flow=10, payload=acoustic_payload()))
+            self.app._handle_frame(telemetry_frame(flow=10, payload=analog_payload()))
         self.assertIsNone(self.app.telemetry_pending)
         self.assertEqual(self.app.last_telemetry_at, 104.999)
-        self.assertEqual(self.app.sound_vars["sound_rms_1"].get(), "123456")
+        self.assertEqual(self.app.sound_vars["sound_p2p_1"].get(), "1234")
         self.app.database.insert.assert_called_once()
 
     def test_timeout_disconnect_and_error_clear_sound_and_timestamp(self):
-        self.receive(acoustic_payload())
+        self.receive(analog_payload())
         self.app.telemetry_pending = (2, 100.0)
         self.app._poll_telemetry(105.0)
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
         self.assertIsNone(self.app.last_telemetry_at)
-        self.app._handle_frame(telemetry_frame(flow=2, payload=acoustic_payload()))
+        self.app._handle_frame(telemetry_frame(flow=2, payload=analog_payload()))
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
-        self.receive(acoustic_payload())
+        self.receive(analog_payload())
         self.app.telemetry_pending = (2, 100.0)
         self.app._handle_frame(UPPER.LoRaProtocol.build_packet(0x7E, 1, 0, 2, 1, 2, b"\x0A"))
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
         self.assertIsNone(self.app.last_telemetry_at)
-        self.receive(acoustic_payload())
+        self.receive(analog_payload())
         self.app._disconnect()
         self.assertTrue(all(value.get() == "--" for value in self.app.sound_vars.values()))
         self.assertIsNone(self.app.last_telemetry_at)

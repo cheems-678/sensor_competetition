@@ -15,6 +15,12 @@ SPEC.loader.exec_module(DESKTOP)
 
 
 class DesktopEntryTests(unittest.TestCase):
+    def test_model_check_requires_isolated_sample_transport(self):
+        for flags in (("--self-test-acoustic-model",), ("--self-test-output", "unused.json", "--self-test-acoustic-model")):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                DESKTOP.run(flags)
+            self.assertEqual(caught.exception.code, 2)
+
     def test_frozen_database_stays_next_to_exe(self):
         with patch.object(DESKTOP.sys, "frozen", True, create=True), \
                 patch.object(DESKTOP.sys, "executable", str(PATH.parent / "portable" / "app.exe")):

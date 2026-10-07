@@ -25,7 +25,7 @@ describe('environment trend display', () => {
     expect(screen.getByLabelText('曲线读数')).toHaveTextContent('主机50%')
     fireEvent.click(screen.getByRole('button', { name: '气压' }))
     expect(screen.getByRole('img', { name: '主从机气压变化曲线' })).toBeVisible()
-    expect(screen.getByLabelText('曲线读数')).toHaveTextContent('101,325Pa')
+    expect(screen.getByLabelText('曲线读数')).toHaveTextContent('101.3kPa')
     expect(screen.getByText(/记录本次连接/)).not.toBeVisible()
     fireEvent.click(screen.getByText('说明'))
     expect(screen.getByText(/记录本次连接/)).toBeVisible()

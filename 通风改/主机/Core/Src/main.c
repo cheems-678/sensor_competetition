@@ -30,6 +30,7 @@
 #include "master_identity.h"
 #include "master_queues.h"
 #include "master_runtime.h"
+#include "master_acoustic.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -110,6 +111,7 @@ int main(void)
   }
   FanPwm_Init();
   MasterRuntime_Init();
+  MasterAcoustic_Init(HAL_GetTick());
 
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -118,7 +120,9 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     LoraP2PRX();
+    MasterAcoustic_Process(HAL_GetTick());
     MasterRuntime_ProcessOne(HAL_GetTick());
+    MasterAcoustic_Process(HAL_GetTick());
     LoraP2PTX();
   }
   /* USER CODE END 3 */

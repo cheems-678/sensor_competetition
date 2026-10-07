@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from './button'
 import { HelpDetails } from './help-details'
+import { AnalysisDetails } from './analysis-details'
+import { ConfirmDelete } from './confirm-delete'
+import { SensorChecks } from './sensor-checks'
 import { initialAISettings, initialWarnings, type Accepted, type DesktopAPI, type Provider, type Snapshot } from '../lib/types'
 
 const providers: Record<Provider, string> = { deepseek: 'DeepSeek', kimi: 'Kimi', custom: '自定义兼容接口' }
 const scenarios = { normal: '正常波动', warming: '持续升温', humidity: '持续增湿', spike: '单点尖峰', missing: '数据缺失', timeout: '通信超时', recovery: '异常恢复', reconnect: '重新连接' }
 const statuses = { active: '活动', unavailable: '数据不可用', resolved: '已恢复', stopped: '已停止' }
 const sources = { master: '主机', slave: '从机', link: '通信链路' }
-const kinds = { temp: '温度上升', humidity: '湿度上升', communication: '通信异常' }
+const kinds = { temp: '温度上升', humidity: '湿度上升', communication: '通信异常', distance: '粮面距离过近', rain: '降雨提示', smoke: '烟雾相对指数超限' }
 
 export function WarningMonitor({ snapshot, api, execute }: { snapshot: Snapshot; api: DesktopAPI | null; execute: (command: () => Promise<Accepted>) => Promise<void> }) {
   const warning = snapshot.warnings ?? initialWarnings()
@@ -19,6 +22,9 @@ export function WarningMonitor({ snapshot, api, execute }: { snapshot: Snapshot;
   const [humidity, setHumidity] = useState(String(warning.rates.humidity))
   const [scenario, setScenario] = useState('warming')
   const [formError, setFormError] = useState('')
+  const [deleting, setDeleting] = useState<{ kind: 'manual' | 'event'; id: number } | null>(null)
+  const [archiving, setArchiving] = useState(false)
+  useEffect(() => { setArchiving(false) }, [manual?.id, manual?.archive_id])
   const [mode, setMode] = useState<'api' | 'simulation'>(snapshot.ai_settings?.mode ?? 'api')
   const [keys, setKeys] = useState<Record<Provider, string>>({ deepseek: '', kimi: '', custom: '' })
   const [remember, setRemember] = useState<Record<Provider, boolean>>({deepseek:true, kimi:true, custom:true})
@@ -68,10 +74,11 @@ export function WarningMonitor({ snapshot, api, execute }: { snapshot: Snapshot;
   return <div className="warning-monitor">
     <section className="panel manual-trends" aria-label="主动趋势监测">
       <div className="panel-heading"><h2>主动趋势监测</h2><Button disabled={!api?.monitor_trends || manual?.analysis.status === 'pending'} onClick={() => send(() => api!.monitor_trends!())}>{manual?.analysis.status === 'pending' ? '正在分析…' : '手动趋势监测'}</Button></div>
-      <p className="warning-note">点击检查当前温湿度趋势并生成 AI 解释。自动预警关闭时也可用；按下方已应用阈值判断。</p>
+      <p className="warning-note">点击检查当前温湿度趋势及雨滴、烟雾、测距状态并生成 AI 解释。温湿度自动预警关闭时也可用。</p>
       <div className="warning-progress">{(['master_temp', 'master_humidity', 'slave_temp', 'slave_humidity'] as const).map(key => <span key={key}>{key.startsWith('master') ? '主机' : '从机'}{key.endsWith('temp') ? '温度' : '湿度'}：{warning.metrics[key]?.rate == null ? `积累中 ${Math.floor(warning.metrics[key]?.span_seconds ?? 0)}/${warning.window_seconds ?? 120}s` : `${warning.metrics[key].rate!.toFixed(2)}${key.endsWith('temp') ? '℃' : '百分点'}/分钟`}</span>)}</div>
       {manual && <div className={`manual-result ${manual.status}`}>
-        <p className="manual-conclusion" role="status">{manual.message}</p>
+        <p className="manual-conclusion" role="status">温湿度检查：{manual.message}</p>
+        {manual.sensor_review && <><p className="warning-note">附加检查：{{ normal: '三项均未发现预警条件', abnormal: '存在预警条件', partial: '部分数据不可用，不能完整判定', unavailable: '三项数据不可用，无法判定' }[manual.sensor_review.status]}</p><SensorChecks readings={manual.sensor_review.readings} /></>}
         <p className="warning-note">检查时间：{manual.checked_at} · {manual.data_source === 'demo' ? '模拟数据' : '实测数据'}{manual.stale && ' · 结果已过期，请重新检查'}</p>
         <div className="manual-channels">{Object.entries(manual.channels).map(([key, item]) => <article key={key} className={`manual-channel ${item.exceeded ? 'exceeded' : ''}`}>
           <h3>{sources[item.source]} · {item.kind === 'temp' ? '温度' : '湿度'} <span>{item.state === 'unavailable' ? '不可用' : item.direction === 'unknown' ? '尚无趋势' : {rising:'上升',falling:'下降',stable:'平稳'}[item.direction]}</span></h3>
@@ -82,7 +89,8 @@ export function WarningMonitor({ snapshot, api, execute }: { snapshot: Snapshot;
         </article>)}</div>
         {manual.analysis.status === 'pending' && <p className="warning-note" role="status">本地检查已完成，正在请求 AI 解释…</p>}
         {manual.analysis.status === 'error' && <p className="warning-error" role="alert">{manual.analysis.result?.error} 本地检查结果保留，可再次点击监测。</p>}
-        {manual.analysis.status === 'complete' && <div className="warning-analysis"><strong>{manual.analysis.mode === 'api' ? manual.data_source === 'demo' ? '真实 API 分析 · 输入为模拟数据' : '真实 API 分析' : '模拟解释，未调用 API'}</strong><p>{manual.analysis.result?.summary}</p><p>可能原因：{manual.analysis.result?.possible_causes?.join('；') || '未提供额外原因'}</p><p>检查建议：{manual.analysis.result?.suggested_checks?.join('；')}</p><p className="warning-note">{manual.analysis.result?.limitations}</p><p className="warning-note">{manual.analysis.provider} / {manual.analysis.model} · {manual.analysis.analyzed_at}</p></div>}
+        {manual.analysis.status === 'complete' && <AnalysisDetails key={manual.id} analysis={manual.analysis} />}
+        <div className="warning-actions"><Button variant="outline" disabled={!api?.delete_manual_trend || manual.analysis.status === 'pending'} onClick={() => setDeleting({ kind: 'manual', id: manual.id })}>删除</Button><Button disabled={!api?.archive_manual_trend || archiving || !!manual.archive_id || manual.analysis.status === 'pending'} onClick={() => { setArchiving(true); send(async () => { try { return await api!.archive_manual_trend!(manual.id) } finally { setArchiving(false) } }) }}>{manual.archive_id ? '已记录到档案' : archiving ? '正在记录…' : '记录到档案'}</Button></div>
       </div>}
     </section>
     <section className="panel warning-settings" aria-label="预警规则设置">
@@ -91,9 +99,11 @@ export function WarningMonitor({ snapshot, api, execute }: { snapshot: Snapshot;
         <label className="warning-toggle"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />启用自动温湿度趋势预警</label>
         <label>温度变化速度（℃/分钟）<input inputMode="decimal" value={temp} onChange={event => setTemp(event.target.value)} /></label>
         <label>湿度变化速度（百分点/分钟）<input inputMode="decimal" value={humidity} onChange={event => setHumidity(event.target.value)} /></label>
-        <Button disabled={!api?.update_warning_settings} onClick={applyRules}>应用检测设置</Button>
+        <Button disabled={!api?.update_warning_settings} onClick={applyRules}>应用</Button>
       </div>
       <p className="warning-note">默认值仅为测试参数，现场使用前需按工况设置。{warning.enabled && '满两分钟有效数据后判断趋势。'}</p>
+      <SensorChecks readings={warning.sensors ?? {}} />
+      <p className="warning-note">三项实时监测：下雨提示；烟雾相对指数 &gt;10；粮面距离 &lt;10 cm。测距需≥11 cm连续有效3秒恢复；5 cm仍是有效下限。三项不受温湿度开关影响，不自动操作设备。</p>
       <details className="help-details warning-api"><summary>API 设置 · {snapshot.ai_settings?.mode === 'simulation' ? '本地模拟' : '真实 API'}</summary><div className="warning-form">
         <label>分析模式<select value={mode} onChange={event => setMode(event.target.value as 'api' | 'simulation')}><option value="api">真实 API</option><option value="simulation">本地模拟</option></select></label>
         <label>API 厂家<select value={provider} onChange={event => selectProvider(event.target.value as Provider)}>{Object.entries(providers).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
@@ -117,13 +127,20 @@ export function WarningMonitor({ snapshot, api, execute }: { snapshot: Snapshot;
       {warning.events.map(event => <article key={event.id} className={`warning-card ${event.status}`}>
         <div className="panel-heading"><h3>{sources[event.source]} · {kinds[event.kind]}</h3><span className="device-label">{statuses[event.status]} · {event.read ? '已读' : '未读'}</span></div>
         {event.trigger === 'manual' && <p className="warning-note">手动检查发现 · 未使用自动预警的30秒确认条件</p>}
-        <p>{event.kind === 'communication' ? event.evidence.message : `当前 ${event.evidence.current?.toFixed(2)}${event.kind === 'temp' ? '℃' : '%RH'}，两分钟变化速度 ${event.evidence.rate?.toFixed(2)}${event.kind === 'temp' ? '℃' : '百分点'}/分钟，配置 ${event.evidence.threshold}/分钟。`}</p>
+        <p>{event.kind === 'communication' ? event.evidence.message : event.kind === 'rain' ? `当前检测：${event.evidence.current === 1 ? '下雨（1）' : '无雨（0）'}；降雨提示条件：状态=1。` : event.kind === 'smoke' ? `当前相对指数 ${event.evidence.current} / 100，超限条件 >${event.evidence.threshold}；非浓度百分比。` : event.kind === 'distance' ? `仓顶到粮面距离 ${event.evidence.current?.toFixed(1)} cm，过近条件 <${event.evidence.threshold} cm；≥11 cm连续有效3秒恢复。` : `当前 ${event.evidence.current?.toFixed(2)}${event.kind === 'temp' ? '℃' : '%RH'}，两分钟变化速度 ${event.evidence.rate?.toFixed(2)}${event.kind === 'temp' ? '℃' : '百分点'}/分钟，配置 ${event.evidence.threshold}/分钟。`}</p>
+        {['rain', 'smoke', 'distance'].includes(event.kind) && <p className="warning-note">首次触发值：{event.evidence.trigger_value ?? event.evidence.current} {event.evidence.unit ?? 'cm'} · 最近有效检测：{event.evidence.detected_at ?? event.occurred_at}{event.status === 'unavailable' && ' · 数据不可用，以上为最后有效读数'}{event.status === 'active' && event.evidence.message && ` · ${event.evidence.message}`}</p>}
         <p className="warning-note">发生：{event.occurred_at}{event.ended_at && ` · 结束：${event.ended_at}`}</p>
-        <div className="warning-actions"><Button variant="outline" disabled={!api?.analyze_warning || event.analysis.status === 'pending'} onClick={() => send(() => api!.analyze_warning!(event.id))}>{event.analysis.status === 'pending' ? '分析中…' : '分析原因'}</Button><Button variant="ghost" disabled={event.read || !api?.mark_warning_read} onClick={() => send(() => api!.mark_warning_read!(event.id))}>标记已读</Button></div>
+        <div className="warning-actions"><Button variant="outline" disabled={!api?.analyze_warning || event.analysis.status === 'pending'} onClick={() => send(() => api!.analyze_warning!(event.id))}>{event.analysis.status === 'pending' ? '分析中…' : '分析原因'}</Button><Button variant="ghost" disabled={event.read || !api?.mark_warning_read} onClick={() => send(() => api!.mark_warning_read!(event.id))}>标记已读</Button><Button variant="outline" disabled={!api?.delete_warning} onClick={() => setDeleting({ kind: 'event', id: event.id })}>删除</Button></div>
         {event.analysis.status === 'stale' && <p className="warning-note">旧分析已过期，请重新分析。</p>}
         {event.analysis.status === 'error' && <p role="alert" className="warning-error">{event.analysis.result?.error}</p>}
-        {event.analysis.status === 'complete' && <div className="warning-analysis"><strong>{event.analysis.mode === 'api' ? event.analysis.data_source === 'demo' ? '真实 API 分析 · 输入为模拟数据' : '真实 API 分析' : '模拟解释，未调用 API'}</strong><p>{event.analysis.result?.summary}</p><p>可能原因：{event.analysis.result?.possible_causes?.join('；')}</p><p>检查建议：{event.analysis.result?.suggested_checks?.join('；')}</p><p className="warning-note">{event.analysis.result?.limitations}</p><p className="warning-note">{event.analysis.provider} / {event.analysis.model} · {event.analysis.analyzed_at}</p></div>}
+        {event.analysis.status === 'complete' && <AnalysisDetails analysis={event.analysis} />}
       </article>)}
     </section>
+    <section className="panel warning-archives" aria-label="趋势档案"><div className="panel-heading"><h2>趋势档案</h2><span className="device-label">{warning.archive_persistent ? '本机保存 · 最近200份' : '本次运行 · 最近200份'}</span></div>
+      {warning.archive_error && <p role="alert" className="warning-error">{warning.archive_error}</p>}
+      {!warning.archives?.length && <p className="warning-empty">暂无档案，手动检查完成后可记录。</p>}
+      {warning.archives?.map(report => <details key={report.archive_id} className="archive-report"><summary>{report.checked_at} · {report.data_source === 'demo' ? '模拟' : '实测'} · {report.message}</summary><p>{report.stale ? '归档时报告已过期' : '点击时的本地检查结果'}</p><div className="manual-channels">{Object.entries(report.channels).map(([key, channel]) => <div key={key}><h3>{sources[channel.source]} · {channel.kind === 'temp' ? '温度' : '湿度'}</h3><p>{channel.direction === 'unknown' ? '尚无趋势' : { rising: '上升', falling: '下降', stable: '平稳' }[channel.direction]} · {channel.rate?.toFixed(3) ?? '--'} {channel.kind === 'temp' ? '℃' : '百分点'}/分钟</p><p>当前 {channel.current?.toFixed(2) ?? '--'} · 有效 {Math.floor(channel.span_seconds)} 秒 · {channel.sample_count} 样本 · 阈值 {channel.threshold}/分钟</p><p>{channel.exceeded ? '上升趋势超限' : channel.state === 'ready' ? '未发现超限' : '数据不足或不可用'}</p></div>)}</div>{report.sensor_review && <SensorChecks readings={report.sensor_review.readings} />}{report.analysis.result?.summary ? <AnalysisDetails analysis={report.analysis} /> : <p className="warning-note">AI 状态：{report.analysis.status} {report.analysis.result?.error}</p>}</details>)}
+    </section>
+    {deleting && <ConfirmDelete message={deleting.kind === 'event' ? '确定要删除该预警事件吗？' : '确定要删除本次检测结果吗？'} cancel={() => setDeleting(null)} confirm={() => { const target = deleting; setDeleting(null); if (target.kind === 'event' && api?.delete_warning) send(() => api.delete_warning!(target.id)); else if (target.kind === 'manual' && api?.delete_manual_trend) send(() => api.delete_manual_trend!(target.id)) }} />}
   </div>
 }

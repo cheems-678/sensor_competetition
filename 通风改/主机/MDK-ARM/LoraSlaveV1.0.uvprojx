@@ -597,6 +597,16 @@
           <GroupName>Drivers/STM32F1xx_HAL_Driver</GroupName>
           <Files>
             <File>
+              <FileName>stm32f1xx_hal_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f1xx_hal_adc_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc_ex.c</FilePath>
+            </File>
+            <File>
               <FileName>stm32f1xx_hal_gpio_ex.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio_ex.c</FilePath>
@@ -738,6 +748,11 @@
           <GroupName>Bsp</GroupName>
           <Files>
             <File>
+              <FileName>max4466_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Bsp/max4466_adc.c</FilePath>
+            </File>
+            <File>
               <FileName>lora.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\lora.c</FilePath>
@@ -772,6 +787,11 @@
         <Group>
           <GroupName>App</GroupName>
           <Files>
+            <File>
+              <FileName>master_acoustic.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/master_acoustic.c</FilePath>
+            </File>
             <File>
               <FileName>lora_protocol.c</FileName>
               <FileType>1</FileType>

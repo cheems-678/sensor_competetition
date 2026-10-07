@@ -1,3 +1,3 @@
 @echo off
 chcp 65001 >nul
-start "" "%~dp0智能通风系统_AI主动监测版_两分钟.exe" %*
+start "" "%~dp0智能通风系统_声学模型版_20261007.exe" %*

@@ -283,7 +283,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(s["values"], {"master_temp": "23.6 ℃", "slave_temp": "24.2 ℃",
                                        "master_humidity": "47.8 %RH", "slave_humidity": "51.3 %RH",
                                        "master_pressure": "101325 Pa", "slave_pressure": "100982 Pa"})
-        self.assertEqual(s["sounds"], {"sound_rms_1": "0", "sound_rms_2": "9873"})
+        self.assertEqual({k: s["sounds"][k] for k in ("sound_rms_1", "sound_rms_2")}, {"sound_rms_1": "0", "sound_rms_2": "9873"})
         self.assertEqual(s["updated_at"], "12:34:56")
         self.assertEqual(s["slave_link"], "从机链路：在线")
         self.assertEqual(self.stored_rows(), 1)
@@ -292,7 +292,7 @@ class ControllerTests(unittest.TestCase):
         self.connect()
         for left, right in ((4294967294, 131071), (1, 2), (0, 0)):
             self.sample(telemetry_payload(left=left, right=right))
-            self.assertEqual(self.controller.sounds, {"sound_rms_1": str(left), "sound_rms_2": str(right)})
+            self.assertEqual({k: self.controller.sounds[k] for k in ("sound_rms_1", "sound_rms_2")}, {"sound_rms_1": str(left), "sound_rms_2": str(right)})
 
     def test_master_rain_three_states_ignore_slave_link_and_never_send_controls(self):
         port = self.connect()
@@ -369,7 +369,7 @@ class ControllerTests(unittest.TestCase):
     def test_sound_sentinel_and_zero_are_distinct(self):
         self.connect()
         self.sample(telemetry_payload(left=P.UINT32_INVALID, right=0))
-        self.assertEqual(self.controller.sounds, {"sound_rms_1": "--", "sound_rms_2": "0"})
+        self.assertEqual({k: self.controller.sounds[k] for k in ("sound_rms_1", "sound_rms_2")}, {"sound_rms_1": "--", "sound_rms_2": "0"})
 
     def test_wrong_flow_invalid_and_duplicate_frames_only_log(self):
         self.connect()
@@ -684,7 +684,7 @@ class ServiceTests(unittest.TestCase):
                 self.await_snapshot(service, lambda s: s["connected"])
                 api.read_once()
                 s = self.await_snapshot(service, lambda s: s["telemetry"]["updated_at"] is not None)
-                self.assertEqual(s["telemetry"]["sounds"]["sound_rms_1"], "0")
+                self.assertEqual(s["telemetry"]["sounds"]["sound_p2p_1"], "0")
                 self.assertEqual(s["telemetry"]["rain"], {"state": None, "source": "master"})
                 real_serial.Serial.assert_not_called()
                 real_serial.tools.list_ports.comports.assert_not_called()
@@ -798,7 +798,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual({name for name in dir(api) if not name.startswith("_")},
                          {"refresh_ports", "connect", "disconnect", "read_once", "set_fan", "set_window", "get_snapshot",
                           "get_ai_settings", "update_ai_settings", "update_warning_settings", "mark_warning_read",
-                      "analyze_warning", "set_warning_scenario", "save_ai_config", "test_ai_connection", "monitor_trends"})
+                 "analyze_warning", "set_warning_scenario", "save_ai_config", "test_ai_connection", "monitor_trends",
+                 "delete_warning", "delete_manual_trend", "archive_manual_trend"})
 
     def test_close_during_command_does_not_run_a_final_tick(self):
         entered, release = threading.Event(), threading.Event()

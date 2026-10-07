@@ -1,5 +1,17 @@
 # 主机电脑侧回归测试
 
+- MAX4466测试新增test_master_acoustic.c（真实短窗服务，假ADC块/时间）和test_max4466_adc.c（真实BSP、专用平台替身）；检查引脚/秩序/ADC时钟/DMA、最新值下降与有效0、全五路同窗、缺口/驱动故障/恢复/年龄与tick回绕。新测试仍仅放tests、stubs，产物仅build；不加入Keil。原协议/runtime/UART测试扩展46字节73/77、300ms年龄、从机离线仍有本地声音及旧42输入隔离，不缩减其他传感器和控制回归。
+
+在本目录并沿用下方临时MinGW PATH，新增测试命令：
+```powershell
+gcc -std=c99 -Wall -Wextra -Werror -I../App -I../Bsp test_master_acoustic.c ../App/master_acoustic.c -o build/test_master_acoustic.exe
+./build/test_master_acoustic.exe
+gcc -std=c99 -Wall -Wextra -Werror -Istubs -I../Bsp test_max4466_adc.c ../Bsp/max4466_adc.c -o build/test_max4466_adc.exe
+./build/test_max4466_adc.exe
+```
+
+ADC平台桩额外注入复制期间边界切换，验证不返回覆盖中的块；逐项注入时钟/DMA/ADC/通道/校准/启动失败及DMA错误，失败不进入全板Error_Handler。测试不证明真实波形、增益或模块存在。
+
 - 通信回归增加真实Keil栈预算检查：`node check_keil_stack.cjs`使用本工程1024字节启动栈，至少256字节中断余量；明确拒绝原1032字节调用图。三板同时验证无网页动作、查询/网页动作交错、连续五分钟上位机遥测及主机广播持续，不仅检查动作ACK。
 - 热点真实控制优化回归：遥测竞争只保存一条网页命令并优先排空、2000 ms期限/回绕、重复/冲突、已有窗口不抢占、第二条不同请求busy、过期不执行；三板链路核对真实PWM入口及ACK匹配和五分钟并行运行，固件不改线格式。
 - 热点控制台新增12/21方向/载荷/CRC、runtime网页来源及同flow跨来源隔离、4风机/窗口、重复/冲突/busy与丢ACK检查；真实UART验证21不被当窗口请求、不启动接收事务，发送队列8秒过期避免卡住原控制。控制室三板整链路新增实际网页控制与5分钟并行运行。原风机在遥测/窗口busy期间改为返回已有ERROR_BUSY，不执行；测试按用户批准仲裁规则更新。

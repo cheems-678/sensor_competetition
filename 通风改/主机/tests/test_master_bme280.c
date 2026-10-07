@@ -11,6 +11,14 @@
 #include "master_rain.h"
 #include "master_queues.h"
 #include "master_runtime.h"
+#include "master_acoustic.h"
+static uint8_t audio_valid;
+static MasterAcousticSample audio_sample;
+uint8_t MasterAcoustic_GetSample(uint32_t now, MasterAcousticSample *sample)
+{
+    if (!audio_valid || (uint32_t)(now - audio_sample.tick) >= 300U) { return 0U; }
+    *sample = audio_sample; return 1U;
+}
 
 static uint32_t tick;
 static BME280_Status init_status, trigger_status, read_status;
@@ -110,6 +118,7 @@ uint8_t MasterQueues_SendLoRa(const LoRaMessage *message)
 
 static void reset(uint32_t start)
 {
+    audio_valid = 0U;
     tick = start;
     init_status = trigger_status = read_status = BME280_OK;
     sensor_data.temperature_x100 = -555;
@@ -174,18 +183,18 @@ static void send_slave_query(uint32_t now)
 static void assert_telemetry(uint16_t flow, uint8_t valid)
 {
     static const uint8_t invalid[] = {
-        0x3BU, 0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+        0x73U, 0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
         0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU
     };
     assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == flow);
-    assert(sent.payload_length == 42U);
-    assert(memcmp(&sent.payload[26], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
+    assert(sent.payload_length == 46U);
+    assert(memcmp(&sent.payload[30], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
     assert(memcmp(&sent.payload[18], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
     if (valid == 0U) { assert(memcmp(sent.payload, invalid, sizeof(invalid)) == 0); }
     else
     {
         static const uint8_t expected[] = {
-            0x3BU, 0xC8U, 0xFFU, 0xF4U, 1U, 0xCDU, 0x8BU, 1U, 0U,
+            0x73U, 0xC8U, 0xFFU, 0xF4U, 1U, 0xCDU, 0x8BU, 1U, 0U,
             0U, 0x80U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU
         };
         assert(memcmp(sent.payload, expected, sizeof(expected)) == 0);
@@ -314,8 +323,8 @@ static void test_force_sample_and_fan_during_conversion(void)
     assert(!MasterRuntime_CanTransmit());
     slave_reply(slave_flow, 0U);
     process(11U);
-    assert(sent.payload[0] == 0x3FU);
-    sent.payload[0] = 0x3BU; /* Online sensor failure still has invalid slave slots. */
+    assert(sent.payload[0] == 0x77U);
+    sent.payload[0] = 0x73U; /* Online sensor failure still has invalid slave slots. */
     assert_telemetry(9U, 1U);
     assert(light_count == 4U);
     request(LORA_MSG_READ_TELEMETRY, 11U, 1U, 0U);
@@ -326,8 +335,8 @@ static void test_force_sample_and_fan_during_conversion(void)
     assert(sent.destination_role == LORA_ROLE_SLAVE); /* Await new local sample too. */
     process(22U);
     process(23U);
-    assert(sent.payload[0] == 0x3FU);
-    sent.payload[0] = 0x3BU;
+    assert(sent.payload[0] == 0x77U);
+    sent.payload[0] = 0x73U;
     assert_telemetry(11U, 1U);
 }
 
@@ -352,7 +361,7 @@ static void test_failed_force_and_queue_retry(void)
     assert(send_count == 1U && MasterRuntimeDiag.lora_queue_failure_count == 1U);
     fail_send = 0U;
     process(11U);
-    sent.payload[0] = 0x3BU;
+    sent.payload[0] = 0x73U;
     assert_telemetry(13U, 1U);
     process(12U);
     assert(send_count == 2U);
@@ -374,7 +383,7 @@ static void test_busy_force_and_unsolicited_slave(void)
     slave_reply(slave_flow, 1U);
     process(10U);
     assert(sent.flow_id == 14U && sent.type == LORA_MSG_TELEMETRY);
-    assert(sent.payload[0] == 0x3FU && sent.payload[9] == 250U);
+    assert(sent.payload[0] == 0x77U && sent.payload[9] == 250U);
     assert(sent.payload[1] == 0xC8U); /* Master reading never overwritten. */
     assert(MasterRuntimeDiag.slave_response_match_count == 1U);
     slave_reply(slave_flow, 1U);
@@ -523,9 +532,9 @@ static void test_extended_audio_and_aggregate_expiry(void)
     slave_reply_audio((uint16_t)(slave_flow + 1U), 7U, 9U); process(51U);
     assert(MasterRuntimeDiag.slave_response_unmatched_count == 1U);
     slave_reply_audio(slave_flow, 0U, 131071U); process(52U);
-    assert(sent.payload_length == 42U && sent.payload[0] == 0x3FU);
-    assert(read_u32(&sent.payload[18]) == 0U);
-    assert(read_u32(&sent.payload[22]) == 131071U);
+    assert(sent.payload_length == 46U && sent.payload[0] == 0x77U);
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
+    assert(read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
     assert(sent.payload[9] == 250U && sent.payload[1] == 0xC8U);
 
     /* Queue failure must not make the same snapshot fresh again. */
@@ -538,14 +547,14 @@ static void test_extended_audio_and_aggregate_expiry(void)
     assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 41U);
     assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
     assert(read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
-    assert(sent.payload[0] == 0x3FU && sent.payload[9] == 250U);
+    assert(sent.payload[0] == 0x77U && sent.payload[9] == 250U);
 
     /* Local event queue delay counts toward audio age, not a new reception. */
     request(LORA_MSG_READ_TELEMETRY, 42U, 0U, 0U); process(420U);
     send_slave_query(470U);
     slave_reply_audio(slave_flow, 80000U, 65536U);
     event.received_tick = 471U; preserve_received_tick = 1U; process(771U);
-    assert(sent.flow_id == 42U && sent.payload[0] == 0x3FU);
+    assert(sent.flow_id == 42U && sent.payload[0] == 0x77U);
     assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
     preserve_received_tick = 0U;
 
@@ -563,7 +572,7 @@ static void test_extended_audio_and_aggregate_expiry(void)
     send_slave_query(50U);
     slave_reply_audio(slave_flow, 0xFFFFFFFFU, 0xFFFFFFFFU); process(51U);
     assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
-    assert(sent.payload[0] == 0x3FU); /* Link online is not sensor validity. */
+    assert(sent.payload[0] == 0x77U); /* Link online is not sensor validity. */
 }
 
 static void window_ack(uint16_t flow, uint8_t status)
@@ -659,8 +668,8 @@ static void test_window_busy_does_not_replace_telemetry_or_fan(void)
     assert(sent.type == LORA_MSG_ERROR && sent.payload[0] == 1U);
     assert(!MasterRuntime_CanTransmit());
     slave_reply_audio(flow, 7U, 9U); process(10U);
-    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 200U && sent.payload[0] == 0x3FU);
-    assert(read_u32(&sent.payload[18]) == 7U && read_u32(&sent.payload[22]) == 9U);
+    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 200U && sent.payload[0] == 0x77U);
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU && read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
     assert(MasterRuntimeDiag.window_busy_count == 1U && MasterRuntimeDiag.window_request_queued_count == 0U);
 
     request(LORA_MSG_SET_WINDOW, 203U, 1U, 0U); process(11U);
@@ -754,8 +763,8 @@ static void test_window_then_forced_telemetry_is_independent(void)
     slave_reply_audio(slave_flow, 17U, 19U); process(115U);
     assert(sent.type == LORA_MSG_READ_TELEMETRY); /* Forced conversion began at 114 ms. */
     process(124U);
-    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 501U && sent.payload[0] == 0x3FU);
-    assert(read_u32(&sent.payload[18]) == 17U && read_u32(&sent.payload[22]) == 19U);
+    assert(sent.type == LORA_MSG_TELEMETRY && sent.flow_id == 501U && sent.payload[0] == 0x77U);
+    assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU && read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
     assert(MasterBme280Diag.sample_attempt_count == 2U);
     assert(MasterRuntimeDiag.window_response_match_count == 1U);
     assert(MasterRuntimeDiag.slave_response_match_count == 1U);
@@ -813,7 +822,7 @@ static void test_rain_is_local_and_does_not_control_actuators(void)
         process(0U);
         send_slave_query(50U);
         process(550U); /* Local rain survives remote and local BME failures. */
-        assert(sent.payload_length == 42U && sent.payload[0] == 0x3BU);
+        assert(sent.payload_length == 46U && sent.payload[0] == 0x73U);
         assert(sent.payload[LORA_TELEMETRY_RAIN_OFFSET] == states[i]);
         assert(sent.payload[1] == 0U && sent.payload[2] == 0x80U);
         assert(fan_count == 0U && MasterRuntimeDiag.window_command_count == 0U);
@@ -824,10 +833,10 @@ static void test_rain_is_local_and_does_not_control_actuators(void)
         slave_reply_audio(slave_flow, 17U, 19U);
         event.data.lora_message.payload[17] = (uint8_t)(1U - (states[i] & 1U));
         process(611U);
-        assert(sent.payload[0] == 0x3FU);
+        assert(sent.payload[0] == 0x77U);
         assert(sent.payload[17] == states[i]); /* Never trust the slave's slot. */
-        assert(read_u32(&sent.payload[18]) == 17U);
-        assert(read_u32(&sent.payload[22]) == 19U);
+        assert(read_u32(&sent.payload[18]) == 0xFFFFFFFFU);
+        assert(read_u32(&sent.payload[22]) == 0xFFFFFFFFU);
         assert(fan_count == 0U && MasterRuntimeDiag.window_command_count == 0U);
     }
 }
@@ -846,8 +855,8 @@ static void test_mq2_event_delay_and_aggregate_retry(void)
     event.received_tick = 80U; preserve_received_tick = 1U;
     fail_send = 1U; process(100U);
     fail_send = 0U; process(150U);
-    age = (uint16_t)(sent.payload[32] | ((uint16_t)sent.payload[33] << 8U));
-    assert(sent.payload[0] == 0x3FU && sent.payload[26] == 0U && age == 1970U);
+    age = (uint16_t)(sent.payload[36] | ((uint16_t)sent.payload[37] << 8U));
+    assert(sent.payload[0] == 0x77U && sent.payload[30] == 0U && age == 1970U);
 
     request(LORA_MSG_READ_TELEMETRY, 901U, 0U, 0U); process(200U); send_slave_query(250U);
     slave_reply_audio(slave_flow, 0U, 7U);
@@ -856,8 +865,8 @@ static void test_mq2_event_delay_and_aggregate_retry(void)
     event.data.lora_message.payload[32] = (uint8_t)1990U;
     event.data.lora_message.payload[33] = (uint8_t)(1990U >> 8U);
     event.received_tick = 260U; process(270U);
-    assert(memcmp(&sent.payload[26], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
-    assert(sent.payload[0] == 0x3FU && sent.payload[9] == 250U);
+    assert(memcmp(&sent.payload[30], "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8U) == 0);
+    assert(sent.payload[0] == 0x77U && sent.payload[9] == 250U);
 }
 
 static void test_status_without_control_room(void)
@@ -904,8 +913,8 @@ static void test_ultrasonic_event_delay_and_retry(void)
     event.data.lora_message.payload[40]=(uint8_t)1900U; event.data.lora_message.payload[41]=(uint8_t)(1900U>>8U);
     event.received_tick=80U; preserve_received_tick=1U; fail_send=1U; process(100U);
     fail_send=0U; process(150U);
-    age=(uint16_t)(sent.payload[40]|((uint16_t)sent.payload[41]<<8U));
-    assert(sent.payload_length==42U && sent.payload[0]==0x3FU && age==1970U && sent.payload[34]==250U);
+    age=(uint16_t)(sent.payload[44]|((uint16_t)sent.payload[45]<<8U));
+    assert(sent.payload_length == 46U && sent.payload[0]==0x77U && age==1970U && sent.payload[38]==250U);
     assert(memcmp(sent.payload+26U,"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",8U)==0);
 }
 
@@ -959,6 +968,18 @@ static void test_web_wait_limits(void)
 }
 int main(void)
 {
+    {
+        unsigned i;
+        reset(0U); request(LORA_MSG_READ_TELEMETRY, 1234U, 0U, 0U); process(0U); send_slave_query(50U);
+        /* Slave absent: local microphone remains available, MQ/US do not. */
+        audio_valid=1U; audio_sample.tick=500U;
+        for(i=0U;i<5U;i++) audio_sample.peak_to_peak[i]=(uint16_t)(i*100U);
+        process(550U);
+        assert(sent.payload_length==46U && sent.payload[0]==0x73U);
+        for(i=0U;i<5U;i++) assert(Max4466Wire_U16(sent.payload+18U+2U*i)==i*100U);
+        assert(Max4466Wire_U16(sent.payload+28U)==50U && Max4466Wire_U16(sent.payload+30U)==65535U);
+        assert(LoRaProtocol_ValidateMessage(&sent)==LORA_PROTOCOL_OK);
+    }
     test_web_wait_limits();
     test_web_control_arbitration();
     test_ultrasonic_event_delay_and_retry();

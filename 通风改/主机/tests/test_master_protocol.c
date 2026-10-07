@@ -380,11 +380,11 @@ static void test_ultrasonic_layout_bounds_and_crc(void)
     frame[45]^=1U; assert(LoRaProtocol_Decode(frame,length,&decoded)==LORA_PROTOCOL_CRC_MISMATCH);
     for(i=0U;i<4U;i++)
     {
-        const uint16_t bad[4]={0U,99U,10000U,65535U};
+        const uint16_t bad[4]={0U,49U,10000U,65535U};
         for(j=0U;j<4U;j++)
         {
             uint16_t v = (i<2U && j==2U) ? 501U : (i==3U && j==2U ? 2000U : bad[j]);
-            if ((i==2U && (v==99U)) || (i==3U && v<2000U)) continue;
+            if ((i==2U && (v==49U)) || (i==3U && v<2000U)) continue;
             m.payload[34U+2U*i]=(uint8_t)v; m.payload[35U+2U*i]=(uint8_t)(v>>8U);
             assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
         }
@@ -410,6 +410,22 @@ static void test_web_wire(void)
 }
 int main(void)
 {
+    {
+        LoRaMessage m = telemetry(2U,46U,0x73U), d;
+        uint8_t frame[141]; uint16_t length; unsigned i;
+        memset(m.payload + 18U, 0xFF, 28U);
+        assert(LoRaProtocol_ValidateMessage(&m) == LORA_PROTOCOL_OK);
+        for (i=0U;i<6U;i++) { m.payload[18U+2U*i]=(uint8_t)(i==5U?299U:4095U); m.payload[19U+2U*i]=(uint8_t)((i==5U?299U:4095U)>>8U); }
+        assert(LoRaProtocol_Encode(&m,frame,sizeof(frame),&length)==LORA_PROTOCOL_OK && length==59U);
+        assert(LoRaProtocol_Decode(frame,length,&d)==LORA_PROTOCOL_OK && !memcmp(m.payload,d.payload,46U));
+        for(i=0U;i<256U;i++) { m.payload[0]=(uint8_t)i; assert((LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_OK)==(i==0x73U||i==0x77U)); }
+        m.payload[0]=0x73U; m.payload[28]=44U; m.payload[29]=1U;
+        assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+        m.payload[28]=0U; m.payload[29]=0U; m.payload[18]=m.payload[19]=0xFFU;
+        assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_PAYLOAD_VALUE);
+        m.source_role=3U; m.destination_role=2U; m.destination_group=1U;
+        assert(LoRaProtocol_ValidateMessage(&m)==LORA_PROTOCOL_INVALID_DIRECTION);
+    }
     test_web_wire();
     test_ultrasonic_layout_bounds_and_crc();
     test_master_status_shape_crc_and_stream();

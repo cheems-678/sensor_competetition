@@ -68,11 +68,52 @@ function transform(point: Point, view: GranaryView): Point {
   return [x, y * Math.cos(view.pitch) - z * Math.sin(view.pitch), y * Math.sin(view.pitch) + z * Math.cos(view.pitch)]
 }
 
+function projectTransformed(point: Point, width: number, height: number, view: GranaryView) {
+  const scale = Math.min(height * .258, width * .23) * view.zoom
+  const perspective = 6 / (6 - point[2])
+  return [width * .5 + point[0] * scale * perspective, height * .5 - point[1] * scale * perspective] as const
+}
+
+// Shared camera/projection keeps sound markers attached to the wall when rotating.
+export function projectGranaryPoint(point: Point, width: number, height: number, view: GranaryView) {
+  return projectTransformed(transform(point, view), width, height, view)
+}
+
+export function drawAcousticGranary(context: CanvasRenderingContext2D, width: number, height: number, view: GranaryView) {
+  const project = (point: Point) => projectGranaryPoint(point, width, height, view)
+  const path = (points: Point[], color: string, lineWidth = 1, fill?: string) => {
+    const projected = points.map(project)
+    context.beginPath(); context.moveTo(...projected[0])
+    for (const point of projected.slice(1)) context.lineTo(...point)
+    if (fill) { context.closePath(); context.fillStyle = fill; context.fill() }
+    context.strokeStyle = color; context.lineWidth = lineWidth; context.stroke()
+  }
+  context.clearRect(0, 0, width, height)
+  const glow = context.createRadialGradient(width * .5, height * .46, 0, width * .5, height * .46, height * .7)
+  glow.addColorStop(0, '#102b40'); glow.addColorStop(1, '#060e1b')
+  context.fillStyle = glow; context.fillRect(0, 0, width, height)
+  for (let i = -4; i <= 4; i++) {
+    path([[i * .4, -1.27, -1.8], [i * .4, -1.27, 1.8]], '#31516945', .6)
+    path([[-1.8, -1.27, i * .4], [1.8, -1.27, i * .4]], '#31516945', .6)
+  }
+  for (let i = 0; i < 32; i++) {
+    const a = i / 32 * Math.PI * 2, b = (i + 1) / 32 * Math.PI * 2
+    path([circle(a, -1.1), circle(b, -1.1), circle(b, 1.02), circle(a, 1.02)], '#5996b018', .5, '#449fc80a')
+    path([circle(a, 1.02, .96), circle(b, 1.02, .96), [0, 1.59, 0]], '#609fba20', .5, '#6fb5d00a')
+    if (i % 4 === 0) path([circle(a, -1.1), circle(a, 1.02), [0, 1.59, 0]], '#79bdd252')
+  }
+  for (const y of [-1.1, -.57, -.04, .49, 1.02]) {
+    path(Array.from({ length: 65 }, (_, i) => circle(i / 64 * Math.PI * 2, y)), '#6baecb65', y === 1.02 || y === -1.1 ? 1.4 : .6)
+  }
+  context.setLineDash([4, 5])
+  path(Array.from({ length: 65 }, (_, i) => circle(i / 64 * Math.PI * 2, .45, .86)), '#3bced988', 1.2)
+  context.setLineDash([])
+}
+
 export function drawGranary(context: CanvasRenderingContext2D, width: number, height: number, view: GranaryView, seconds = 0) {
   const scale = Math.min(height * .258, width * .23) * view.zoom
   const project = (p: Point) => {
-    const perspective = 6 / (6 - p[2])
-    return [width * .5 + p[0] * scale * perspective, height * .5 - p[1] * scale * perspective]
+    return projectTransformed(p, width, height, view)
   }
   context.clearRect(0, 0, width, height)
   const glow = context.createRadialGradient(width * .5, height * .48, 0, width * .5, height * .48, height * .85)

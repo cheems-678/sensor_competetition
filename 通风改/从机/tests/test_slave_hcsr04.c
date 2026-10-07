@@ -40,7 +40,7 @@ int main(void)
     assert(SlaveHcsr04Diag.last_error == SLAVE_HCSR04_ERROR_TIMEOUT);
     SlaveHcsr04_Process(600U); sample = finish(600U, 2916U);
     assert(sample.distance_mm == 500U && sample.filter_count == 1U);
-    SlaveHcsr04_Process(700U); pulse = 580U; result = HCSR04_COMPLETE; SlaveHcsr04_Process(705U);
+    SlaveHcsr04_Process(700U); pulse = 285U; result = HCSR04_COMPLETE; SlaveHcsr04_Process(705U);
     assert(!SlaveHcsr04_GetSample(705U, &sample) && SlaveHcsr04Diag.last_error == SLAVE_HCSR04_ERROR_RANGE);
     SlaveHcsr04_Process(800U); pulse = 65535U; result = HCSR04_COMPLETE; SlaveHcsr04_Process(805U);
     assert(!SlaveHcsr04Diag.valid && SlaveHcsr04Diag.raw_mm > 500U);
@@ -68,6 +68,11 @@ int main(void)
     start_ok = 0U; SlaveHcsr04_Process(4100U);
     assert(!SlaveHcsr04Diag.valid && SlaveHcsr04Diag.last_error == SLAVE_HCSR04_ERROR_START);
     assert(!SlaveHcsr04_GetSample(4100U, 0));
+    start_ok = 1U; SlaveHcsr04_Init(5000U);
+    sample = finish(5000U, 292U); assert(sample.raw_mm == 50U && sample.distance_mm == 50U);
+    SlaveHcsr04_Process(5100U); sample = finish(5100U, 297U); assert(sample.raw_mm == 51U);
+    SlaveHcsr04_Process(5200U); pulse = 285U; result = HCSR04_COMPLETE; SlaveHcsr04_Process(5205U);
+    assert(!SlaveHcsr04_GetSample(5205U, &sample) && SlaveHcsr04Diag.last_error == SLAVE_HCSR04_ERROR_RANGE);
     puts("PASS: HC-SR04 service, range, median, errors, stale capture, source age and tick rollover");
     return 0;
 }

@@ -3,9 +3,10 @@ import { Activity, Pause, Play } from 'lucide-react'
 import { Button } from './button'
 import { HelpDetails } from './help-details'
 import { smokeLevel, smokeReading, smokeReferencePoints } from '../lib/smoke-index'
-import type { Snapshot } from '../lib/types'
-export function SmokeMonitor({ mq2, connected, active }: { mq2: Snapshot['telemetry']['mq2']; connected: boolean; active: boolean }) {
+import type { SensorCheck, Snapshot } from '../lib/types'
+export function SmokeMonitor({ mq2, connected, active, warning }: { mq2: Snapshot['telemetry']['mq2']; connected: boolean; active: boolean; warning?: SensorCheck }) {
   const index = smokeReading(mq2, connected)
+  const abnormal = index !== null && (warning ? warning.state === 'abnormal' : index > 10)
   const [paused, setPaused] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
   const [visible, setVisible] = useState(() => !document.hidden)
   const [inViewport, setInViewport] = useState(true)
@@ -22,7 +23,7 @@ export function SmokeMonitor({ mq2, connected, active }: { mq2: Snapshot['teleme
   const density = index === null || index === 0 ? 0 : 3 + Math.ceil(index / 5)
   const color = index === null ? '#7d93aa' : index < 25 ? '#8bcbdc' : index < 60 ? '#dbc091' : index < 80 ? '#efad65' : '#ef8068'
   const sceneStyle = { '--smoke-color': color, '--smoke-opacity': .12 + (index ?? 0) * .005, '--smoke-duration': `${8 - (index ?? 0) * .035}s` } as CSSProperties
-  return <section className="panel smoke-monitor" style={sceneStyle} aria-labelledby="smoke-monitor-title">
+  return <section className={`panel smoke-monitor ${abnormal ? 'smoke-abnormal' : ''}`} style={sceneStyle} aria-labelledby="smoke-monitor-title">
     <div className="rain-monitor-heading"><div className="heading-name"><Activity size={18} /><h2 id="smoke-monitor-title">烟雾监测</h2></div><Button variant="outline" size="small" onClick={() => setPaused(value => !value)}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? '继续动画' : '暂停动画'}</Button></div>
     <div className="smoke-monitor-body">
       <div ref={sceneRef} className="smoke-scene" data-running={running} data-density={density} aria-label="烟雾强弱动画">
@@ -44,6 +45,7 @@ export function SmokeMonitor({ mq2, connected, active }: { mq2: Snapshot['teleme
         <div className="smoke-scale-labels"><span>正常参考</span><span>烟雾增强</span><span>浓烟参考</span></div>
       </div>
     </div>
+    <div className="link-row"><span>烟雾预警状态</span><span role="status" aria-label="烟雾预警状态" className={abnormal ? 'warning-error' : index === null ? '' : 'online'}>{index === null ? '数据不可用' : abnormal ? '相对指数超限（>10）' : '正常检测'}</span></div>
     <HelpDetails>
         <p >按你的现场电压观察建立经验参考，浓度未标定。指数不是浓度百分比或 ppm。</p>
         <div className="smoke-reference">{smokeReferencePoints.map(([mv, value]) => <div key={mv}><span>{(mv / 1000).toFixed(2)} V</span><strong>{value}</strong></div>)}</div>

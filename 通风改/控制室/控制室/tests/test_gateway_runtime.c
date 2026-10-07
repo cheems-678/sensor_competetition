@@ -418,7 +418,7 @@ static void test_ultrasonic_layout_bounds_crc_split(void)
     {
         reset(); request(951U,0U); length=make_frame(frame,2U,2U,951U,42U,0x3FU);
         for(j=0U;j<4U;j++) { frame[45U+2U*j]=(uint8_t)good[j]; frame[46U+2U*j]=(uint8_t)(good[j]>>8U); }
-        if(i<8U) { unsigned field=i/2U; uint16_t v=(i%2U)?65535U:(field<2U?99U:field==2U?0U:2000U); frame[45U+2U*field]=(uint8_t)v; frame[46U+2U*field]=(uint8_t)(v>>8U); }
+        if(i<8U) { unsigned field=i/2U; uint16_t v=(i%2U)?65535U:(field<2U?49U:field==2U?0U:2000U); frame[45U+2U*field]=(uint8_t)v; frame[46U+2U*field]=(uint8_t)(v>>8U); }
         refresh_crc(frame,length); if(i==8U) frame[45]^=1U;
         push(0U,frame,length); GatewayRuntime_Process(1U); assert(send_count==(i==9U?2U:1U));
     }
@@ -426,6 +426,28 @@ static void test_ultrasonic_layout_bounds_crc_split(void)
 
 int main(void)
 {
+    {
+        uint8_t frame[141]; unsigned length, i, flags;
+        for(flags=0U;flags<256U;flags++) {
+            reset(); request(1234U,0U); length=make_frame(frame,2U,2U,1234U,46U,(uint8_t)flags);
+            memset(frame+29U,255U,28U);
+            for(i=0U;i<6U;i++){ frame[29U+2U*i]=(uint8_t)i; frame[30U+2U*i]=0U; }
+            refresh_crc(frame,length);
+            push(0U,frame,39U); GatewayRuntime_Process(1U); assert(send_count==1U);
+            push(0U,frame+39U,length-39U); GatewayRuntime_Process(2U);
+            assert(send_count==((flags==0x73U||flags==0x77U)?2U:1U));
+            if(send_count==2U) assert(sent[1].length==59U && !memcmp(sent[1].bytes,frame,length));
+        }
+        for(i=0U;i<5U;i++) {
+            reset(); request(1235U,0U); length=make_frame(frame,2U,2U,1235U,46U,0x77U);
+            memset(frame+29U,255U,28U);
+            if(i==0U) frame[29U]=0U; /* Mixed sentinel */
+            if(i==1U) { memset(frame+29U,0U,12U); frame[39]=44U; frame[40]=1U; }
+            if(i==2U) { memset(frame+29U,0U,12U); frame[30]=16U; }
+            refresh_crc(frame,length); if(i==3U) frame[29]^=1U;
+            push(0U,frame,length); GatewayRuntime_Process(1U); assert(send_count==(i==4U?2U:1U));
+        }
+    }
     test_ultrasonic_layout_bounds_crc_split();
     test_master_status_does_not_complete_poll();
     test_mq2_layout_and_fields();

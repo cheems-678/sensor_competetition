@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "../../monitor_status_wire.h"
 #include "../../web_control_wire.h"
+#include "../../max4466_wire.h"
 
 #define LORA_PROTOCOL_HEADER_1              (0xAAU)
 #define LORA_PROTOCOL_HEADER_2              (0x55U)

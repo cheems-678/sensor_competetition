@@ -329,6 +329,19 @@ int main(void)
     test_idle_status_cannot_hold_control();
     test_ultrasonic_queue_age_retry_and_expiry();
     test_web_result_uart();
+    {
+        LoRaMessage m=response(LORA_MSG_TELEMETRY); unsigned i;
+        assert(MasterQueues_Init()); can_transmit=1U; status_enabled=0U; uart_fail=1U;
+        m.payload_length=46U; m.payload[0]=0x73U; memset(m.payload+18U,255U,28U);
+        for(i=0U;i<5U;i++){m.payload[18U+2U*i]=(uint8_t)i; m.payload[19U+2U*i]=0U;}
+        m.payload[28]=100U; m.payload[29]=0U;
+        tick=100000U; assert(MasterQueues_SendLoRa(&m)); LoraP2PTX();
+        tick=100199U; LoraP2PTX(); assert(Max4466Wire_U16(last_uart_message.payload+28U)==299U);
+        tick=100200U; uart_fail=0U; LoraP2PTX();
+        assert(!memcmp(last_uart_message.payload+18U,"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",12U));
+        m.payload[28]=0U; tick=0xFFFFFFF0U; assert(MasterQueues_SendLoRa(&m));
+        tick=34U; LoraP2PTX(); assert(Max4466Wire_U16(last_uart_message.payload+28U)==50U);
+    }
     puts("10 real LoRa UART/MQ2/ultrasonic/window/status groups passed (retry/TTL/half-duplex/wrap/ACK/query/RX tick)");
     return 0;
 }

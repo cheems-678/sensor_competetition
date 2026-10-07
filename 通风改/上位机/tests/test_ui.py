@@ -134,8 +134,9 @@ class MonitorLayoutTests(unittest.TestCase):
                 for name, _, unit in app.FIELD_LABELS:
                     value = "4294967294" if "pressure" in name else "-3276.7" if "temperature" in name else "6553.4"
                     app.value_vars[name].set(f"{value} {unit}")
-                app.sound_vars["sound_rms_1"].set("0")
-                app.sound_vars["sound_rms_2"].set("4294967294")
+                app.sound_vars["sound_p2p_1"].set("0")
+                for channel in range(2, 6):
+                    app.sound_vars[f"sound_p2p_{channel}"].set("4095")
                 app.rain_var.set("有雨")
                 app.window_status_var.set("开窗启动PWM已确认（完成/停止状态未知）")
                 app.slave_link_var.set("从机链路：未知（旧布局）")
@@ -149,7 +150,7 @@ class MonitorLayoutTests(unittest.TestCase):
                               if isinstance(widget, UPPER.ttk.Label)
                               and str(widget.cget("textvariable")) == str(variable)]
                     self.assertEqual(len(labels), 1)
-                self.assertEqual(app.sound_vars["sound_rms_1"].get(), "0")
+                self.assertEqual(app.sound_vars["sound_p2p_1"].get(), "0")
                 app._disconnect()
                 app.update()
                 self.assertTrue(all(variable.get() == "--" for variable in app.value_vars.values()))

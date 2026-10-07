@@ -10,12 +10,12 @@
 #include "master_ingress.h"
 #include "master_light_control.h"
 #include "master_rain.h"
+#include "master_acoustic.h"
 #include "master_messages.h"
 #include "master_queues.h"
 #include "stm32f1xx_hal.h"
 
 #define MASTER_ERROR_BUSY          (1U)
-#define MASTER_SLAVE_AUDIO_MAX_AGE_MS (300UL)
 
 MasterRuntimeDiagnostics MasterRuntimeDiag;
 
@@ -33,10 +33,9 @@ typedef struct
     uint8_t window_status;
     uint8_t slave_online;
     uint8_t slave_data[8];
-    uint8_t slave_audio[8];
     uint8_t slave_mq2[8];
     uint8_t slave_ultrasonic[8];
-    uint32_t slave_audio_received_tick;
+    uint32_t slave_sensor_received_tick;
     uint8_t web_origin, web_id[8];
     uint8_t active;
 } PendingSlaveRequest;
@@ -100,9 +99,11 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
 {
     MasterBme280Sample sample;
 
-    memset(payload, 0, LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE);
+    MasterAcousticSample audio;
+    uint8_t ch;
+    memset(payload, 0, MAX4466_WIRE_SIZE);
     payload[LORA_TELEMETRY_FLAGS_OFFSET] = LORA_TELEMETRY_FLAG_MASTER_BME |
-        LORA_TELEMETRY_FLAG_DUAL_BME | LORA_TELEMETRY_FLAG_ACOUSTIC | LORA_TELEMETRY_FLAG_MQ2 |
+        LORA_TELEMETRY_FLAG_DUAL_BME | 0x40U | LORA_TELEMETRY_FLAG_MQ2 |
         LORA_TELEMETRY_FLAG_ULTRASONIC;
     MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_BME_TEMP_OFFSET],
                            (uint16_t)LORA_PROTOCOL_TEMPERATURE_INVALID);
@@ -113,41 +114,40 @@ static void MasterRuntime_FillPlaceholderTelemetry(uint8_t *payload,
     memcpy(&payload[LORA_TELEMETRY_REMOTE_BME_TEMP_OFFSET],
            g_pending.slave_data, sizeof(g_pending.slave_data));
     payload[LORA_TELEMETRY_RAIN_OFFSET] = MasterRain_GetState(now_ms);
-    memset(&payload[LORA_TELEMETRY_SOUND_1_OFFSET], 0xFF, 8U);
-    memset(&payload[LORA_TELEMETRY_MQ2_OFFSET], 0xFF, 8U);
-    memset(&payload[LORA_TELEMETRY_ULTRASONIC_OFFSET], 0xFF, 8U);
+    memset(&payload[MAX4466_WIRE_SOUND_OFFSET], 0xFF, 12U);
+    memset(&payload[MAX4466_WIRE_MQ_OFFSET], 0xFF, 16U);
+    if (MasterAcoustic_GetSample(now_ms, &audio)) {
+        for (ch = 0U; ch < 5U; ++ch) {
+            MasterRuntime_WriteU16(payload + MAX4466_WIRE_SOUND_OFFSET + 2U * ch, audio.peak_to_peak[ch]);
+        }
+        MasterRuntime_WriteU16(payload + MAX4466_WIRE_AGE_OFFSET, (uint16_t)(now_ms - audio.tick));
+    }
     if (g_pending.slave_online != 0U)
     {
         payload[0] |= LORA_TELEMETRY_FLAG_SLAVE_ONLINE;
         {
             uint16_t source_age = (uint16_t)((uint16_t)g_pending.slave_mq2[6] |
                                             ((uint16_t)g_pending.slave_mq2[7] << 8U));
-            uint32_t elapsed = now_ms - g_pending.slave_audio_received_tick;
+            uint32_t elapsed = now_ms - g_pending.slave_sensor_received_tick;
             if ((source_age < LORA_TELEMETRY_MQ2_MAX_AGE_MS) &&
                 (elapsed < LORA_TELEMETRY_MQ2_MAX_AGE_MS - source_age))
             {
-                memcpy(&payload[LORA_TELEMETRY_MQ2_OFFSET], g_pending.slave_mq2, 8U);
-                MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_MQ2_AGE_OFFSET],
+                memcpy(&payload[MAX4466_WIRE_MQ_OFFSET], g_pending.slave_mq2, 8U);
+                MasterRuntime_WriteU16(&payload[MAX4466_WIRE_MQ_OFFSET + 6U],
                                        (uint16_t)(source_age + elapsed));
             }
         }
         {
             uint16_t source_age = (uint16_t)((uint16_t)g_pending.slave_ultrasonic[6] |
                                            ((uint16_t)g_pending.slave_ultrasonic[7] << 8U));
-            uint32_t elapsed = now_ms - g_pending.slave_audio_received_tick;
+            uint32_t elapsed = now_ms - g_pending.slave_sensor_received_tick;
             if ((source_age < LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS) &&
                 (elapsed < LORA_TELEMETRY_ULTRASONIC_MAX_AGE_MS - source_age))
             {
-                memcpy(&payload[LORA_TELEMETRY_ULTRASONIC_OFFSET], g_pending.slave_ultrasonic, 8U);
-                MasterRuntime_WriteU16(&payload[LORA_TELEMETRY_ULTRASONIC_AGE_OFFSET],
+                memcpy(&payload[MAX4466_WIRE_US_OFFSET], g_pending.slave_ultrasonic, 8U);
+                MasterRuntime_WriteU16(&payload[MAX4466_WIRE_US_OFFSET + 6U],
                                       (uint16_t)(source_age + elapsed));
             }
-        }
-        if ((uint32_t)(now_ms - g_pending.slave_audio_received_tick) <
-            MASTER_SLAVE_AUDIO_MAX_AGE_MS)
-        {
-            memcpy(&payload[LORA_TELEMETRY_SOUND_1_OFFSET],
-                   g_pending.slave_audio, sizeof(g_pending.slave_audio));
         }
     }
 
@@ -178,7 +178,7 @@ static uint8_t MasterRuntime_QueueTelemetry(uint16_t flow_id, uint32_t now_ms)
 
     MasterRuntime_SetAddress(&outbound, LORA_MSG_TELEMETRY,
                              LORA_ROLE_CONTROL_ROOM, 0U, flow_id);
-    outbound.payload_length = LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE;
+    outbound.payload_length = MAX4466_WIRE_SIZE;
     MasterRuntime_FillPlaceholderTelemetry(outbound.payload, now_ms);
     if (MasterRuntime_Queue(&outbound) == 0U)
     {
@@ -262,7 +262,6 @@ static void MasterRuntime_HandleControl(const LoRaMessage *message,
         MasterRuntime_WriteU16(&g_pending.slave_data[0], 0x8000U);
         MasterRuntime_WriteU16(&g_pending.slave_data[2], 0xFFFFU);
         MasterRuntime_WriteU32(&g_pending.slave_data[4], 0xFFFFFFFFUL);
-        memset(g_pending.slave_audio, 0xFF, sizeof(g_pending.slave_audio));
         memset(g_pending.slave_mq2, 0xFF, sizeof(g_pending.slave_mq2));
         memset(g_pending.slave_ultrasonic, 0xFF, sizeof(g_pending.slave_ultrasonic));
         g_pending.sample_generation = MasterBme280Diag.completed_count;
@@ -413,16 +412,11 @@ static void MasterRuntime_HandleSlave(const LoRaMessage *slave,
     {
         uint32_t elapsed = now_ms - g_pending.slave_start_tick;
         memcpy(g_pending.slave_data, &slave->payload[1], 8U);
-        if (slave->payload_length >= LORA_PROTOCOL_TELEMETRY_SIZE)
-        {
-            memcpy(g_pending.slave_audio,
-                   &slave->payload[LORA_TELEMETRY_SOUND_1_OFFSET], 8U);
-        }
         if (slave->payload_length >= LORA_PROTOCOL_MQ2_TELEMETRY_SIZE)
         { memcpy(g_pending.slave_mq2, &slave->payload[LORA_TELEMETRY_MQ2_OFFSET], 8U); }
         if (slave->payload_length == LORA_PROTOCOL_ULTRASONIC_TELEMETRY_SIZE)
         { memcpy(g_pending.slave_ultrasonic, &slave->payload[LORA_TELEMETRY_ULTRASONIC_OFFSET], 8U); }
-        g_pending.slave_audio_received_tick = received_tick;
+        g_pending.slave_sensor_received_tick = received_tick;
         g_pending.slave_online = 1U;
         g_pending.slave_state = 3U;
         MasterRuntimeDiag.slave_response_match_count++;

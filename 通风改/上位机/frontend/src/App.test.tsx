@@ -7,7 +7,7 @@ import { BrowserDemo } from './lib/demo'
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-const navigate = (title: string) => fireEvent.click(screen.getByRole('button', { name: `切换到${title}` }))
+const navigate = (title: string) => fireEvent.click(within(document.querySelector('.sidebar nav') as HTMLElement).getByRole('button', { name: `切换到${title}` }))
 
 function fakeAPI(state = initialSnapshot()): DesktopAPI {
   return {
@@ -19,6 +19,21 @@ function fakeAPI(state = initialSnapshot()): DesktopAPI {
 }
 
 describe('existing controls and readable values', () => {
+  it('shows five local MAX4466 channels in pin order even with the slave offline', async () => {
+    const state = initialSnapshot(); state.connected = true; state.revision = 1
+    state.telemetry.slave_link = '从机链路：离线'
+    Object.assign(state.telemetry.sounds, { sound_rms_1: '99999', sound_rms_2: '88888', sound_p2p_1: '0', sound_p2p_2: '100', sound_p2p_3: '200', sound_p2p_4: '300', sound_p2p_5: '4095' })
+    render(<App api={fakeAPI(state)} />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    navigate('声学监测')
+    const page = document.querySelector('[data-page="acoustic"]') as HTMLElement
+    expect(within(page).getByText('主机声音 · MAX4466')).toBeVisible()
+    expect(Array.from(page.querySelectorAll('.metric-label'), node => node.textContent)).toEqual(['声音 1 · PA0', '声音 2 · PA4', '声音 3 · PA6', '声音 4 · PB0', '声音 5 · PA5'])
+    for (const value of ['0', '100', '200', '300', '4095']) expect(within(page).getByText(value)).toBeVisible()
+    expect(within(page).queryByText('99999')).not.toBeInTheDocument()
+    expect(within(page).queryByText('88888')).not.toBeInTheDocument()
+    expect(within(page).queryByText('RMS')).not.toBeInTheDocument()
+  })
   it('removes redundant copy and keeps necessary help collapsed across navigation without commands', async () => {
     const state = initialSnapshot(); state.connected = true; state.port = 'COM32'; state.revision = 1
     const api = fakeAPI(state)
@@ -27,7 +42,7 @@ describe('existing controls and readable values', () => {
     expect(document.querySelector('.page-heading p')).not.toBeInTheDocument()
     expect(document.querySelector('.summary-card small')).not.toBeInTheDocument()
     expect(document.querySelector('.app-footer')).not.toBeInTheDocument()
-    expect(screen.getAllByText('模拟温度')).toHaveLength(1)
+    expect(screen.queryByText('模拟温度')).not.toBeInTheDocument()
     expect(screen.queryByText(/缓慢动态变化|模型模拟不改变实测数据|串口采集已连接|来自遥测帧的链路状态/)).not.toBeInTheDocument()
     const modelHelp = document.querySelector('#granary-help') as HTMLDetailsElement
     const modelNote = within(modelHelp).getByText(/温度为视觉模拟/)
@@ -115,7 +130,7 @@ describe('existing controls and readable values', () => {
     const api = fakeAPI(state)
     render(<App api={api} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    expect(screen.getAllByRole('button', { name: /^切换到/ })).toHaveLength(10)
+    expect(within(document.querySelector('.sidebar nav') as HTMLElement).getAllByRole('button', { name: /^切换到/ })).toHaveLength(10)
     expect(document.querySelector('.page-index')).toHaveTextContent('01 / 10')
     for (const [value, text] of [[0, '无雨'], [1, '有雨'], [null, '状态未知']] as const) {
       state.telemetry.rain = { state: value, source: 'master' }
@@ -161,7 +176,7 @@ describe('existing controls and readable values', () => {
     fireEvent.change(draft, { target: { value: '63' } })
     for (const title of ['环境监测', '雨滴监测', '声学监测', '窗户控制', '通信日志', '粮仓总览']) {
       navigate(title)
-      expect(screen.getByRole('button', { name: `切换到${title}` })).toHaveAttribute('aria-current', 'page')
+      expect(within(document.querySelector('.sidebar nav') as HTMLElement).getByRole('button', { name: `切换到${title}` })).toHaveAttribute('aria-current', 'page')
       expect(document.getElementById('page-title')).toHaveTextContent(title)
       expect(document.getElementById('page-title')).toHaveFocus()
       expect(document.querySelectorAll('.function-page:not([hidden])')).toHaveLength(1)
@@ -179,7 +194,7 @@ describe('existing controls and readable values', () => {
 
   it('collects telemetry and logs on hidden pages and follows logs when returning', async () => {
     vi.useFakeTimers()
-    const state = initialSnapshot(); state.revision = 1
+    const state = initialSnapshot(); state.connected = true; state.revision = 1
     const api = fakeAPI(state)
     render(<App api={api} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
@@ -187,7 +202,7 @@ describe('existing controls and readable values', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '风机 2 占空比' }), { target: { value: '71' } })
     navigate('粮仓总览')
     state.telemetry.values.master_temp = '26.4 ℃'
-    state.telemetry.sounds.sound_rms_1 = '0'
+    state.telemetry.sounds.sound_p2p_1 = '0'
     state.logs = [{ id: 1, text: '[RX] 原始帧完整保留' }]; state.last_log_id = 1
     state.controls.fan_enabled = false; state.revision++
     await act(async () => { await vi.advanceTimersByTimeAsync(100) })
@@ -232,7 +247,7 @@ describe('existing controls and readable values', () => {
     navigate('环境监测')
     expect(screen.getByText('25.2')).toBeVisible()
     navigate('粮仓总览')
-    expect(screen.getByText('模拟温度')).toBeVisible()
+    expect(screen.queryByText('模拟温度')).not.toBeInTheDocument()
     for (const method of [api.connect, api.disconnect, api.read_once, api.set_fan, api.set_window]) expect(method).not.toHaveBeenCalled()
   })
 

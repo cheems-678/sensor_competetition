@@ -110,3 +110,6 @@ HC-SR04回归（在本目录执行，沿用上方MinGW PATH约定）：
 ```
 
 网页控制服务：在tests执行 `gcc -std=c99 -Wall -Wextra -Werror -I../App test_slave_web_control.c ../App/slave_web_control.c ../App/slave_master_status.c -o build/test_slave_web_control.exe`，随后运行程序；HTML改动先生成C头，运行ESP测试产生真实gzip/JSON夹具，再运行Node网页回归。
+# 5 cm范围验收（2026-10-06）
+
+测距有效下限改为50 mm；test_slave_hcsr04.c补充49/50/51 mm有效性边界，网页回归同步检查5–50 cm范围；沿用本目录build产物和既有MinGW/Node工具，不安装依赖、不自动清理。

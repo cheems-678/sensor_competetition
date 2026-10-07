@@ -1,6 +1,6 @@
 export interface LogEntry { id: number; text: string }
 export interface ServoState { channel: number; pin: string; status: string }
-export interface FanState { channel: number; pin: string; duty: number; status: string }
+export interface FanState { channel: number; pin: string; duty: number; status: string; confirmed_duty?: number | null }
 export type Field = 'master_temp' | 'slave_temp' | 'master_humidity' | 'slave_humidity' | 'master_pressure' | 'slave_pressure'
 export interface UltrasonicReading { valid: boolean; distance_mm: number | null; raw_mm: number | null; pulse_us: number | null; age_ms: number | null }
 export type Provider = 'deepseek' | 'kimi' | 'custom'
@@ -9,10 +9,10 @@ export interface AISettings { provider: Provider; profiles: Record<Provider, AIP
   persistent?: boolean
   connection: { status: 'idle' | 'pending' | 'complete' | 'error' | 'stale'; message: string; provider?: string | null; model?: string | null; tested_at?: string } }
 export interface WarningEvent {
-  id: number; key: string; source: 'master' | 'slave' | 'link'; kind: 'temp' | 'humidity' | 'communication'
+  id: number; key: string; source: 'master' | 'slave' | 'link'; kind: 'temp' | 'humidity' | 'communication' | 'distance' | 'rain' | 'smoke'
   status: 'active' | 'unavailable' | 'resolved' | 'stopped'; occurred_at: string; ended_at: string | null; read: boolean
   trigger?: 'manual' | 'automatic'
-  evidence: { current?: number; rate?: number; threshold?: number; window_seconds?: number; sample_count?: number; message?: string }
+  evidence: { current?: number; rate?: number; threshold?: number; window_seconds?: number; sample_count?: number; message?: string; unit?: string; trigger_value?: number; detected_at?: string; recover_threshold?: number; recover_seconds?: number }
   analysis: { status: 'idle' | 'pending' | 'complete' | 'error' | 'stale'; provider: string | null; model: string | null; analyzed_at?: string
     mode?: 'api' | 'simulation'; data_source?: 'demo' | 'telemetry'
     result: { summary?: string; possible_causes?: string[]; suggested_checks?: string[]; limitations?: string; error?: string } | null }
@@ -24,15 +24,27 @@ export interface TrendChannel {
   span_seconds: number; sample_count: number; exceeded: boolean; min: number | null; max: number | null
 }
 export interface TrendReport {
+  sensor_review?: SensorReview
+  archive_id?: string
   id: number; checked_at: string; status: 'normal' | 'abnormal' | 'partial' | 'insufficient' | 'unavailable'
   message: string; channels: Record<string, TrendChannel>; event_ids: number[]; stale: boolean
   data_source: 'demo' | 'telemetry'; analysis: WarningEvent['analysis']
 }
 export interface WarningState {
+  sensors?: SensorReview['readings']
+  near_distance_mm?: number
+  archives?: TrendReport[]; archive_persistent?: boolean; archive_error?: string
   window_seconds?: number
   enabled: boolean; rates: { temp: number; humidity: number }; active_count: number; events: WarningEvent[]
   metrics: Record<string, { span_seconds: number; rate: number | null }>
   manual?: TrendReport | null
+}
+export interface SensorCheck {
+  source: 'master' | 'slave'; kind: 'rain' | 'smoke' | 'distance'; state: 'normal' | 'abnormal' | 'unavailable'
+  current: number | null; threshold: number; unit: string; message: string; observed_at?: string
+}
+export interface SensorReview {
+  status: 'normal' | 'abnormal' | 'partial' | 'unavailable'; readings: Partial<Record<'rain' | 'smoke' | 'distance', SensorCheck>>; event_ids: number[]
 }
 export const initialAISettings = (): AISettings => ({ provider: 'deepseek', mode: 'api', connection: { status: 'idle', message: '' }, profiles: {
   deepseek: { base_url: 'https://api.deepseek.com', model: 'deepseek-flash' },
@@ -48,7 +60,7 @@ export interface Snapshot {
   controls: { read_enabled: boolean; fan_enabled: boolean; window_enabled: boolean }
   telemetry: {
     values: Record<Field, string>
-    sounds: { sound_rms_1: string; sound_rms_2: string }
+    sounds: { sound_rms_1: string; sound_rms_2: string; sound_p2p_1: string; sound_p2p_2: string; sound_p2p_3: string; sound_p2p_4: string; sound_p2p_5: string }
     rain: { state: 0 | 1 | null; source: 'master' | null }
     mq2: { valid: boolean; raw: number | null; pa7_mv: number | null; ao_mv: number | null; age_ms: number | null }
     ultrasonic: UltrasonicReading
@@ -83,6 +95,9 @@ export interface DesktopAPI {
   save_ai_config?(provider: Provider, base_url: string, model: string, mode: 'api' | 'simulation', api_key?: string, remember?: boolean): Promise<Accepted>
   test_ai_connection?(): Promise<Accepted>
   monitor_trends?(): Promise<Accepted>
+  delete_warning?(event_id: number): Promise<Accepted>
+  delete_manual_trend?(report_id: number): Promise<Accepted>
+  archive_manual_trend?(report_id: number): Promise<Accepted>
 }
 
 declare global {
@@ -100,7 +115,7 @@ export const initialSnapshot = (): Snapshot => ({
     values: {
       master_temp: '--', slave_temp: '--', master_humidity: '--', slave_humidity: '--', master_pressure: '--', slave_pressure: '--',
     },
-    sounds: { sound_rms_1: '--', sound_rms_2: '--' },
+    sounds: { sound_rms_1: '--', sound_rms_2: '--', sound_p2p_1: '--', sound_p2p_2: '--', sound_p2p_3: '--', sound_p2p_4: '--', sound_p2p_5: '--' },
     rain: { state: null, source: null },
     mq2: { valid: false, raw: null, pa7_mv: null, ao_mv: null, age_ms: null },
     ultrasonic: { valid: false, distance_mm: null, raw_mm: null, pulse_us: null, age_ms: null },

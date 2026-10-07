@@ -15,7 +15,7 @@ def payload(values=(250, 252, 1469, 60), flags=0x3F, mq=(1241, 1000, 2000, 60)):
 class UltrasonicProtocolTests(unittest.TestCase):
     def test_bounds_sentinels_compatibility_and_layout_matrix(self):
         for protocol in (LoRaProtocol, legacy_tests.UPPER.LoRaProtocol):
-            for values in ((100, 100, 1, 0), (500, 500, 9999, 1999), (65535,) * 4):
+            for values in ((50, 50, 292, 0), (100, 100, 1, 0), (500, 500, 9999, 1999), (65535,) * 4):
                 decoded = protocol.decode_telemetry(payload(values))
                 self.assertEqual(decoded['ultrasonic']['valid'], values[0] != 65535)
                 self.assertTrue(decoded['mq2']['valid'])
@@ -25,7 +25,7 @@ class UltrasonicProtocolTests(unittest.TestCase):
                     self.assertEqual(protocol.decode_telemetry(payload(flags=flags))['ultrasonic']['valid'], flags == 0x3F)
                 else:
                     with self.assertRaises(ValueError): protocol.decode_telemetry(payload(flags=flags))
-            for values in ((99, 250, 1000, 0), (501, 250, 1000, 0), (250, 99, 1000, 0),
+            for values in ((49, 250, 1000, 0), (501, 250, 1000, 0), (250, 49, 1000, 0),
                            (250, 501, 1000, 0), (250, 250, 0, 0), (250, 250, 10000, 0),
                            (250, 250, 1000, 2000), (65535, 250, 1000, 0), (250, 250, 1000, 65535)):
                 with self.assertRaises(ValueError): protocol.decode_telemetry(payload(values))

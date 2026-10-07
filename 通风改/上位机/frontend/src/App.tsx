@@ -4,6 +4,7 @@ import { Button } from './components/button'
 import { FanControl } from './components/fan-control'
 import { PortCombobox } from './components/port-combobox'
 import { GranaryView } from './components/granary-view'
+import { AcousticMonitor } from './components/acoustic-monitor'
 import { RainIndicator, RainMonitor, weatherState } from './components/rain-weather'
 import { SmokeMonitor } from './components/smoke-monitor'
 import { HelpDetails } from './components/help-details'
@@ -17,7 +18,7 @@ import type { DesktopAPI, Field, Snapshot } from './lib/types'
 const metricDefinitions = [
   { suffix: 'temp', label: '温度', unit: '°C' },
   { suffix: 'humidity', label: '湿度', unit: '%' },
-  { suffix: 'pressure', label: '绝对气压', unit: 'Pa' },
+  { suffix: 'pressure', label: '气压', unit: 'kPa' },
 ] as const
 const pages = [
   { id: 'overview', title: '粮仓总览', eyebrow: 'OVERVIEW', icon: Box },
@@ -34,10 +35,11 @@ const pages = [
 type PageID = typeof pages[number]['id']
 export function Metric({ value, label, unit }: { value: string; label: string; unit: string }) {
   const match = value.match(/^(.*?)\s*(℃|°C|%RH|%|Pa)$/u)
-  const reading = match ? match[1].trim() : value
+  const rawReading = match ? match[1].trim() : value
+  const reading = unit === 'kPa' && match?.[2] === 'Pa' && Number.isFinite(Number(rawReading)) ? (Number(rawReading) / 1000).toFixed(1) : rawReading
   return <div className="metric">
     <span className="metric-label">{label}</span>
-    <div className={`metric-value ${reading.startsWith('--') ? 'empty-value' : ''}`}><span>{reading}</span><span className="metric-unit">{match?.[2] ?? unit}</span></div>
+    <div className={`metric-value ${reading.startsWith('--') ? 'empty-value' : ''}`}><span>{reading}</span><span className="metric-unit">{unit === 'kPa' ? unit : match?.[2] ?? unit}</span></div>
   </div>
 }
 function SensorPanel({ side, snapshot }: { side: 'master' | 'slave'; snapshot: Snapshot }) {
@@ -131,7 +133,7 @@ export function App({ api: suppliedAPI }: { api?: DesktopAPI }) {
         <RainMonitor state={weather} updatedAt={snapshot.telemetry.updated_at} active={page === 'rain'} />
       </div>
       <div className="function-page" hidden={page !== 'smoke'} data-page="smoke" aria-label="烟雾监测内容">
-        <SmokeMonitor mq2={mq2} connected={snapshot.connected} active={page === 'smoke'} />
+        <SmokeMonitor mq2={mq2} connected={snapshot.connected} active={page === 'smoke'} warning={snapshot.warnings.sensors?.smoke} />
         <section className="panel sensor-panel" aria-labelledby="smoke-title">
           <div className="panel-heading"><div className="heading-name"><Activity size={18} /><h2 id="smoke-title">从机烟雾传感器</h2></div><span className="device-label">MQ-2<span className="device-divider" />PA7 · AO</span></div>
           <div className="metrics-grid smoke-metrics">
@@ -144,22 +146,14 @@ export function App({ api: suppliedAPI }: { api?: DesktopAPI }) {
         </section>
       </div>
       <div className="function-page" hidden={page !== 'ultrasonic'} data-page="ultrasonic" aria-label="粮面测距内容">
-        <UltrasonicMonitor reading={snapshot.telemetry.ultrasonic} connected={snapshot.connected} />
+        <UltrasonicMonitor reading={snapshot.telemetry.ultrasonic} connected={snapshot.connected} active={page === 'ultrasonic'} nearDistanceMm={snapshot.warnings.near_distance_mm ?? 100} warning={snapshot.warnings.sensors?.distance} />
       </div>
       <div className="function-page" hidden={page !== 'acoustic'} data-page="acoustic" aria-label="声学监测内容">
-        <section className="panel acoustic-panel" aria-labelledby="acoustic-title">
-          <div className="panel-heading"><div className="heading-name"><Waves size={18} strokeWidth={1.6} /><h2 id="acoustic-title">从机声学</h2></div><span className="device-label">RMS<span className="device-divider" />PCM</span></div>
-          <div className="sounds-grid">
-            <div className="sound-metric"><span className="metric-label">声音 1 · 左声道</span><div className="sound-value">{snapshot.telemetry.sounds.sound_rms_1}<span>计数</span></div></div>
-            <div className="sound-metric"><span className="metric-label">声音 2 · 右声道</span><div className="sound-value">{snapshot.telemetry.sounds.sound_rms_2}<span>计数</span></div></div>
-          </div>
-          <HelpDetails><p>旧 SPH0645 采集已停用，MAX4466 的 ADC 采集待接入；当前无有效声音数据显示 --。声音单位为 PCM 计数，不是分贝。</p></HelpDetails>
-          <div className="link-row"><span><Activity size={14} />从机链路</span><span className={`link-state ${slaveLink === '在线' ? 'online' : ''}`}><span className="status-dot" />{slaveLink}</span></div>
-        </section>
+        <AcousticMonitor sounds={snapshot.telemetry.sounds} connected={snapshot.connected && !error} active={page === 'acoustic'} />
       </div>
       <div className="function-page" hidden={page !== 'fans'} data-page="fans" aria-label="风机控制内容">
         <section className="panel fans-panel" aria-label="风机控制">
-          {snapshot.fans.map(fan => <FanControl key={fan.channel} fan={fan} active={page === 'fans'} enabled={!!api && snapshot.controls.fan_enabled} submit={(channel, duty) => run(bridge => bridge.set_fan(channel, duty))} />)}
+          <div className="fan-cards">{snapshot.fans.map(fan => <FanControl key={fan.channel} fan={fan} active={page === 'fans'} enabled={!!api && snapshot.controls.fan_enabled} submit={(channel, duty) => run(bridge => bridge.set_fan(channel, duty))} />)}</div>
           <HelpDetails><p>滑块释放后发送，或输入 0–100 后点击发送。占空比为 PWM 高电平比例，ACK 不代表实测转速。</p></HelpDetails>
         </section>
       </div>

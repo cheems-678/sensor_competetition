@@ -105,7 +105,7 @@ export function GranaryView({ active: pageActive = true }: { active?: boolean })
   }, [paused, pageActive])
   return <section className="panel granary-panel" aria-labelledby="granary-title">
     <div className="granary-heading">
-      <div className="heading-name"><Box size={18} strokeWidth={1.6} /><h2 id="granary-title">粮仓三维视图</h2><span className="granary-badge">模拟温度</span></div>
+      <div className="heading-name"><Box size={18} strokeWidth={1.6} /><h2 id="granary-title">粮仓三维视图</h2></div>
       <div className="granary-controls">
         <Button variant="ghost" size="small" disabled={unavailable} onClick={() => setPaused(value => !value)}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? '继续模拟' : '暂停模拟'}</Button>
         <Button variant="ghost" size="icon" aria-label="缩小粮仓模型" disabled={unavailable} onClick={() => change(adjustGranaryView(view.current, 0, 0, .9))}><Minus size={16} /></Button>

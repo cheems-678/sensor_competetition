@@ -86,6 +86,7 @@ def run(argv=None) -> int:
     parser.add_argument("--check", action="store_true", help="只检查桌面资源与依赖，不创建数据库或打开串口")
     parser.add_argument("--self-test-output", help=argparse.SUPPRESS)
     parser.add_argument("--self-test-sample", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--self-test-acoustic-model", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.legacy and (args.demo or args.check):
         parser.error("--legacy 不可与 --demo 或 --check 同时使用；隔离预览请直接使用 --demo。")
@@ -93,6 +94,8 @@ def run(argv=None) -> int:
         parser.error("隔离打包验收不可与其他运行模式组合。")
     if args.self_test_sample and not args.self_test_output:
         parser.error("--self-test-sample 需要 --self-test-output。")
+    if args.self_test_acoustic_model and not (args.self_test_output and args.self_test_sample):
+        parser.error("声学模型验收需要 --self-test-output 和 --self-test-sample。")
     if args.legacy:
         try:
             from legacy_tk import MonitorApp
@@ -120,12 +123,14 @@ def run(argv=None) -> int:
         return 1
     from backend.service import ControllerService, DesktopAPI
     from backend.ai_config import EncryptedAIStore
+    from backend.trend_archive import FileTrendArchive
     probe = None
     if args.self_test_output:
         from desktop_check import PackagingCheck
-        probe = PackagingCheck(args.self_test_output, args.self_test_sample)
+        probe = PackagingCheck(args.self_test_output, args.self_test_sample, model=args.self_test_acoustic_model)
     service = probe.service() if probe else ControllerService(demo=args.demo, db_path=database_path(),
-                      ai_store_factory=None if args.demo else EncryptedAIStore)
+                      ai_store_factory=None if args.demo else EncryptedAIStore,
+                      archive_store_factory=None if args.demo else FileTrendArchive)
     server = AssetServer(assets)
     startup_exception = None
     try:

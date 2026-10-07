@@ -2,6 +2,7 @@
 #define LORA_PROTOCOL_H
 
 #include <stdint.h>
+#include "../../../max4466_wire.h"
 
 #define LORA_PROTOCOL_HEAD_0               0xAAU
 #define LORA_PROTOCOL_HEAD_1               0x55U

@@ -22,7 +22,7 @@ function WeatherGraphic({ state, compact = false }: { state: WeatherState; compa
       <circle className="sun-glow weather-motion" cx="200" cy="110" r="85" fill="#ffc84e" opacity=".07" />
       <g className="sun-rays weather-motion" stroke="#f9c957" strokeWidth="5" strokeLinecap="round">{Array.from({ length: 12 }, (_, i) => <path key={i} d="M200 40V52" transform={`rotate(${i * 30} 200 110)`} />)}</g>
       <circle cx="200" cy="110" r="42" fill={`url(#${id}-sun)`} stroke="#ffe6a0" strokeWidth="2" />
-      <circle cx="188" cy="98" r="30" fill="none" stroke="#fff3cc" strokeOpacity=".3" />
+      <ellipse cx="180" cy="87" rx="12" ry="7" fill="#ffe2a0" opacity=".09" />
     </g> : <g>
       <g className={state === 'rain' ? 'weather-cloud weather-motion' : 'weather-cloud'}>
         <path d="M117 151C93 151 91 113 116 106C117 76 153 60 177 80C205 41 267 59 270 98C312 95 328 151 287 151Z" fill={`url(#${id}-cloud)`} stroke={state === 'unknown' ? '#657f95' : '#87b9d7'} strokeWidth="2" />
