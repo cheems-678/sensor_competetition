@@ -569,6 +569,7 @@ uint8_t MasterRuntime_IsSlaveRequestCurrent(uint8_t request_type, uint16_t flow_
 uint8_t MasterRuntime_PrepareStatus(LoRaMessage *message, uint32_t now_ms)
 {
     MasterBme280Sample sample;
+    MasterAcousticSample audio;
     uint8_t i;
     if (message == NULL || g_pending.active != 0U ||
         MasterQueues_EventWaiting() != 0U || MasterQueues_LoRaWaiting() != 0U ||
@@ -578,9 +579,9 @@ uint8_t MasterRuntime_PrepareStatus(LoRaMessage *message, uint32_t now_ms)
     MasterRuntimeDiag.status_attempt_count++;
     MasterRuntime_SetAddress(message, LORA_MSG_MASTER_STATUS, LORA_ROLE_SLAVE,
                              LORA_PROTOCOL_SINGLE_GROUP, ++g_status_flow);
-    message->payload_length = MONITOR_STATUS_BYTES;
-    memset(message->payload, 0xFF, MONITOR_STATUS_BYTES);
-    message->payload[0] = MONITOR_STATUS_LAYOUT;
+    message->payload_length = MONITOR_STATUS_AUDIO_BYTES;
+    memset(message->payload, 0xFF, MONITOR_STATUS_AUDIO_BYTES);
+    message->payload[0] = MONITOR_STATUS_AUDIO_LAYOUT;
     MasterRuntime_WriteU16(message->payload + MONITOR_BME_TEMP, 0x8000U);
     if (MasterBme280_GetSample(now_ms, &sample) != 0U)
     {
@@ -601,5 +602,13 @@ uint8_t MasterRuntime_PrepareStatus(LoRaMessage *message, uint32_t now_ms)
     MasterRuntime_WriteU32(message->payload + MONITOR_UPTIME, now_ms);
     MasterRuntime_WriteU32(message->payload + MONITOR_BME_SEQUENCE,
                            MasterBme280Diag.sample_success_count);
+    if (MasterAcoustic_GetSample(now_ms, &audio) != 0U)
+    {
+        for (i = 0U; i < 5U; i++)
+        { MasterRuntime_WriteU16(message->payload + MONITOR_AUDIO_VALUES + 2U * i, audio.peak_to_peak[i]); }
+        MasterRuntime_WriteU16(message->payload + MONITOR_AUDIO_AGE, (uint16_t)(now_ms - audio.tick));
+        /* Completion tick identifies the source window independently of BME. */
+        MasterRuntime_WriteU32(message->payload + MONITOR_AUDIO_SEQUENCE, audio.tick);
+    }
     return 1U;
 }

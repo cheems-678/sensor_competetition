@@ -113,6 +113,14 @@ static uint8_t JsonMonitor(unsigned *length)
         if ((i != 0U && !JsonAppend(length, ",")) ||
             !JsonNumber(length, master.fan_pwm[i] != 0xFFU, master.fan_pwm[i])) { return 0U; }
     }
+    if (!JsonAppend(length, "]},\"acoustic\":{\"valid\":%s,\"age_ms\":", master.acoustic_valid ? "true" : "false") ||
+        !JsonNumber(length, master.acoustic_valid, master.acoustic_age_ms) ||
+        !JsonAppend(length, ",\"sample_seq\":%lu,\"peak_to_peak\":[", (unsigned long)master.acoustic_seq)) { return 0U; }
+    for (i = 0U; i < 5U; i++)
+    {
+        if ((i != 0U && !JsonAppend(length, ",")) ||
+            !JsonNumber(length, master.acoustic_valid, master.acoustic_peak_to_peak[i])) { return 0U; }
+    }
     if (!JsonAppend(length, "]},\"windows\":[")) { return 0U; }
     for (i = 1U; i <= SLAVE_SERVO_COUNT; i++)
     {

@@ -32,9 +32,9 @@ uint8_t MasterRuntime_PrepareStatus(LoRaMessage *message, uint32_t now_ms)
     message->version = 4U; message->type = LORA_MSG_MASTER_STATUS;
     message->source_role = 2U; message->source_group = 1U;
     message->destination_role = 3U; message->destination_group = 1U;
-    message->payload_length = 26U;
-    memset(message->payload, 255U, 26U);
-    message->payload[0] = 1U; message->payload[1] = 0U; message->payload[2] = 128U;
+    message->payload_length = MONITOR_STATUS_AUDIO_BYTES;
+    memset(message->payload, 255U, MONITOR_STATUS_AUDIO_BYTES);
+    message->payload[0] = MONITOR_STATUS_AUDIO_LAYOUT; message->payload[1] = 0U; message->payload[2] = 128U;
     status_prepares++;
     return 1U;
 }

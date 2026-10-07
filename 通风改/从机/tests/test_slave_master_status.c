@@ -47,6 +47,32 @@ int main(void)
     SlaveMasterStatus_Get(1904U, &out); assert(out.bme_valid && out.bme_age_ms == 1999U);
     SlaveMasterStatus_Get(1905U, &out); assert(out.online && !out.bme_valid);
     SlaveMasterStatus_Get(3005U, &out); assert(!out.online);
+    {
+        uint8_t audio[MONITOR_STATUS_AUDIO_BYTES];
+        reset(); memcpy(audio, data, sizeof(data)); memset(audio + 26U, 0xFF, 16U);
+        audio[0] = MONITOR_STATUS_AUDIO_LAYOUT;
+        assert(!MonitorStatus_Validate(audio, 26U));
+        assert(!MonitorStatus_Validate(data, 42U)); /* wrong layout rejected before audio access */
+        assert(SlaveMasterStatus_Accept(1U, audio, sizeof(audio), 100U));
+        SlaveMasterStatus_Get(100U, &out); assert(out.bme_valid && !out.acoustic_valid);
+        for (i = 0U; i < 5U; i++) { audio[26U+2U*i] = (uint8_t)i; audio[27U+2U*i] = 0U; }
+        audio[36] = 100U; audio[37] = 0U; audio[38] = 9U; audio[39] = audio[40] = audio[41] = 0U;
+        assert(SlaveMasterStatus_Accept(2U, audio, sizeof(audio), 200U));
+        SlaveMasterStatus_Get(2099U, &out); assert(out.acoustic_valid && out.acoustic_age_ms == 1999U);
+        assert(out.acoustic_peak_to_peak[0] == 0U && out.acoustic_peak_to_peak[4] == 4U && out.acoustic_seq == 9U);
+        assert(!SlaveMasterStatus_Accept(2U, audio, sizeof(audio), 2099U));
+        SlaveMasterStatus_Get(2100U, &out); assert(!out.acoustic_valid && out.online);
+        audio[36] = 44U; audio[37] = 1U; assert(!MonitorStatus_Validate(audio, sizeof(audio))); /* 300 */
+        audio[36] = 0U; audio[37] = 0U; audio[27] = 16U; assert(!MonitorStatus_Validate(audio, sizeof(audio))); /* 4096 */
+        audio[27] = 0U; audio[36] = audio[37] = 255U; assert(!MonitorStatus_Validate(audio, sizeof(audio)));
+        memset(audio+26U, 255, 12U); assert(SlaveMasterStatus_Accept(3U, audio, sizeof(audio), 2200U));
+        assert(SlaveMasterStatus_Accept(4U, data, sizeof(data), 2300U));
+        SlaveMasterStatus_Get(2300U, &out); assert(!out.acoustic_valid && out.bme_valid);
+        reset(); audio[36] = audio[37] = 0U; memset(audio+26U, 0, 10U);
+        assert(SlaveMasterStatus_Accept(65535U, audio, sizeof(audio), 0xFFFFFFF0U));
+        SlaveMasterStatus_Get(1983U, &out); assert(out.acoustic_valid && out.acoustic_age_ms == 1999U);
+        SlaveMasterStatus_Get(1984U, &out); assert(!out.acoustic_valid);
+    }
     puts("PASS: master status wire bounds, independent expiry, duplicates, reboot and wraps");
     return 0;
 }

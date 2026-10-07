@@ -460,6 +460,25 @@ static void control_post(unsigned id,const char *origin,const char *body,uint8_t
     char req[256];unsigned n;snprintf(req,sizeof(req),"POST /api/control HTTP/1.1\r\nHost: 192.168.4.1\r\nOrigin: %s\r\nContent-Type: application/json\r\nContent-Length: %u\r\n\r\n",origin,(unsigned)strlen(body));ipd(id,req);
     if(split){char part[97];n=(unsigned)strlen(body)/2;memcpy(part,body,n);part[n]=0;ipd(id,part);step(5U);assert(SlaveEspWebDiag.response_count==0U);ipd(id,body+n);}else ipd(id,body);
 }
+static void test_acoustic_http(void)
+{
+    uint8_t p[42]; unsigned i; FILE *f; const char *body;
+    reset(0U); ready(); memset(p,255,sizeof(p)); p[0]=2U;p[1]=0U;p[2]=128U;
+    for(i=0U;i<5U;i++){p[26U+2U*i]=255U;p[27U+2U*i]=15U;}
+    p[36]=p[37]=0U;
+    assert(SlaveMasterStatus_Accept(1U,p,sizeof(p),now));
+    SlaveBme280Diag.sample_success_count=mq_sample.sequence=0xFFFFFFFFU;
+    ultrasonic.sequence=0xFFFFFFFFU; ultrasonic_valid=1U; ultrasonic.tick=now;
+    request(0U,"/api/telemetry");finish(1U);response_size(0U);
+    assert(strstr(responses[0],"\"acoustic\":{\"valid\":true"));
+    assert(strstr(responses[0],"\"peak_to_peak\":[4095,4095,4095,4095,4095]"));
+    body=strstr(responses[0],"\r\n\r\n")+4;
+    f=fopen("build/acoustic_telemetry_fixture.json","wb");assert(f);
+    assert(fwrite(body,1U,strlen(body),f)==strlen(body));assert(fclose(f)==0);
+    step(2000U);request(1U,"/api/telemetry");finish(2U);response_size(1U);
+    assert(strstr(responses[1],"\"acoustic\":{\"valid\":false,\"age_ms\":null"));
+    assert(strstr(responses[1],"\"peak_to_peak\":[null,null,null,null,null]"));
+}
 static void test_control_http(void)
 {
     uint8_t status[26],p[11],result[9];uint16_t flow;
@@ -525,7 +544,7 @@ int main(void)
 {
     test_control_result_before_http_reply();
     test_browser_headers();
-    test_control_http();
+    test_control_http(); test_acoustic_http();
     test_init_and_data(); test_stream_and_connections(); test_http_limits();
     test_recovery_and_servo(); test_wrap_and_invalid_ipd();
     test_mq2_independence();

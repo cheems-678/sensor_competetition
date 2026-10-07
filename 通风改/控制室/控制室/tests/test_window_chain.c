@@ -474,6 +474,7 @@ static void master_status_chain(void)
     MasterLightDiag.stable_dark = MasterLightDiag.light_on = 1U;
     advance(1001U); SlaveMasterStatus_Get(tick, &status);
     CHECK(status.online && status.bme_valid && status.temperature_x10 == 201);
+    CHECK(status.acoustic_valid && status.acoustic_peak_to_peak[0] == 0U && status.acoustic_peak_to_peak[4] == 400U);
     CHECK(status.rain == 1U && status.dark == 1U && status.fan_pwm[3] == 75U);
     CHECK(pc_count == 0U && gateway_downlinks == 0U && SlaveRuntimeDiag.request_count == 0U);
     command(LORA_MSG_SET_WINDOW, 400U, 1U); advance(50U);
@@ -592,7 +593,10 @@ static void continuous_pc_status_web_chain(void)
         else advance(400U);
         check_telemetry((uint16_t)(2000U+round));
         CHECK(pc_count==round+1U);
-        SlaveMasterStatus_Get(tick,&status);CHECK(status.online);
+        SlaveMasterStatus_Get(tick,&status);CHECK(status.online && status.acoustic_valid);
+        CHECK(status.acoustic_peak_to_peak[0]==0U && status.acoustic_peak_to_peak[4]==400U);
+        CHECK(last_pc.payload_length==46U && last_pc.payload[18U]==0U &&
+              last_pc.payload[26U]==144U && last_pc.payload[27U]==1U);
         advance(600U);
     }
     CHECK(MasterRuntimeDiag.telemetry_reply_count==300U);

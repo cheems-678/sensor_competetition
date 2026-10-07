@@ -25,6 +25,7 @@ http.createServer((req, res) => {
         pa7_mv: 1249, ao_mv: 2498},
       ultrasonic: {valid: true, distance_mm: 300, raw_mm: 302, pulse_us: 1761,
         filter_count: 5, sample_seq: seq * 10, age_ms: 10, error: 0},
+      acoustic: {valid:true,age_ms:100,sample_seq:seq,peak_to_peak:[120,540,230,850,0]},
       master: {online: true, rx_age_ms: 50, uptime_ms: Date.now() - started,
         sample_seq: seq, valid: true, age_ms: 100,
         temperature_x10: 238, humidity_x10: 530, pressure_pa: 101250,

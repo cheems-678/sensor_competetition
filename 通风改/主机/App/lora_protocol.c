@@ -59,7 +59,8 @@ static LoRaProtocolStatus ValidateShape(const LoRaMessage *message)
     switch (message->type)
     {
         case (uint8_t)LORA_MSG_MASTER_STATUS:
-            if (message->payload_length != MONITOR_STATUS_BYTES)
+            if (message->payload_length != MONITOR_STATUS_BYTES &&
+                message->payload_length != MONITOR_STATUS_AUDIO_BYTES)
             { return LORA_PROTOCOL_INVALID_PAYLOAD_LENGTH; }
             if (MonitorStatus_Validate(message->payload, message->payload_length) == 0U)
             { return LORA_PROTOCOL_INVALID_PAYLOAD_VALUE; }

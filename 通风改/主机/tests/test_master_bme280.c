@@ -884,6 +884,17 @@ static void test_status_without_control_room(void)
     assert(status.payload[11] == 1U && status.payload[12] == 1U && status.payload[13] == 0U);
     assert(status.payload[14] == 0U && status.payload[17] == 75U);
     assert(MonitorStatus_U16(status.payload+9U) == 990U);
+    assert(status.payload_length == MONITOR_STATUS_AUDIO_BYTES && status.payload[0] == MONITOR_STATUS_AUDIO_LAYOUT);
+    assert(MonitorStatus_U16(status.payload+MONITOR_AUDIO_AGE) == 65535U);
+    audio_valid = 1U; audio_sample.tick = 2000U;
+    for (unsigned i = 0U; i < 5U; i++) { audio_sample.peak_to_peak[i] = (uint16_t)(i * 1000U); }
+    assert(MasterRuntime_PrepareStatus(&status, 2000U));
+    assert(LoRaProtocol_ValidateMessage(&status) == LORA_PROTOCOL_OK);
+    assert(MonitorStatus_U16(status.payload+MONITOR_AUDIO_VALUES) == 0U);
+    assert(MonitorStatus_U16(status.payload+MONITOR_AUDIO_VALUES+8U) == 4000U);
+    assert(MonitorStatus_U32(status.payload+MONITOR_AUDIO_SEQUENCE) == 2000U);
+    /* Restore original cadence checks in a fresh session. */
+    reset(0U); process(0U); process(10U); assert(MasterRuntime_PrepareStatus(&status, 1000U));
     assert(!MasterRuntime_PrepareStatus(&status, 1999U));
     status_queue_busy = 1U; assert(!MasterRuntime_PrepareStatus(&status, 2000U));
     status_queue_busy = 0U;

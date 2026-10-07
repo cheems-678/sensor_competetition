@@ -5,6 +5,13 @@
 #define MONITOR_STATUS_TYPE 0x03U
 #define MONITOR_STATUS_BYTES 26U
 #define MONITOR_STATUS_LAYOUT 1U
+#define MONITOR_STATUS_AUDIO_BYTES 42U
+#define MONITOR_STATUS_AUDIO_LAYOUT 2U
+#define MONITOR_AUDIO_VALUES 26U
+#define MONITOR_AUDIO_AGE 36U
+#define MONITOR_AUDIO_SEQUENCE 38U
+#define MONITOR_AUDIO_MAX_AGE_MS 300UL
+#define MONITOR_AUDIO_SNAPSHOT_MAX_AGE_MS 2000UL
 #define MONITOR_STATUS_PERIOD_MS 1000UL
 #define MONITOR_STATUS_ONLINE_MS 3000UL
 #define MONITOR_BME_MAX_AGE_MS 2000UL
@@ -30,7 +37,8 @@ static inline uint8_t MonitorStatus_Validate(const uint8_t *p, uint8_t size)
     int16_t temperature;
     uint16_t humidity, age;
     uint32_t pressure;
-    if (p == 0 || size != MONITOR_STATUS_BYTES || p[0] != MONITOR_STATUS_LAYOUT)
+    if (p == 0 || !((size == MONITOR_STATUS_BYTES && p[0] == MONITOR_STATUS_LAYOUT) ||
+        (size == MONITOR_STATUS_AUDIO_BYTES && p[0] == MONITOR_STATUS_AUDIO_LAYOUT)))
     { return 0U; }
     temperature = (int16_t)MonitorStatus_U16(p + MONITOR_BME_TEMP);
     humidity = MonitorStatus_U16(p + MONITOR_BME_HUM);
@@ -48,6 +56,16 @@ static inline uint8_t MonitorStatus_Validate(const uint8_t *p, uint8_t size)
     { if (p[i] > 1U && p[i] != 0xFFU) { return 0U; } }
     for (i = MONITOR_FANS; i < MONITOR_FANS + 4U; i++)
     { if (p[i] > 100U && p[i] != 0xFFU) { return 0U; } }
+    if (size == MONITOR_STATUS_AUDIO_BYTES)
+    {
+        age = MonitorStatus_U16(p + MONITOR_AUDIO_AGE);
+        if (age != 0xFFFFU && age >= MONITOR_AUDIO_MAX_AGE_MS) { return 0U; }
+        for (i = 0U; i < 5U; i++)
+        {
+            uint16_t value = MonitorStatus_U16(p + MONITOR_AUDIO_VALUES + 2U * i);
+            if (age == 0xFFFFU ? value != 0xFFFFU : value > 4095U) { return 0U; }
+        }
+    }
     return 1U;
 }
 #endif

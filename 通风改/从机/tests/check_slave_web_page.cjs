@@ -82,10 +82,10 @@ async function check() {
   await settle();
   assert.equal(get('masterTemperature').textContent, '23.1');
   assert.equal(get('masterHumidity').textContent, '55.0');
-  assert.equal(get('masterPressure').textContent, '101325');
+  assert.equal(get('masterPressure').textContent, '101.33');
   assert.equal(get('temperature').textContent, '-12.5');
   assert.equal(get('humidity').textContent, '0.0');
-  assert.equal(get('pressure').textContent, '100123');
+  assert.equal(get('pressure').textContent, '100.12');
   assert.equal(get('mq2').textContent, '3.301');
   assert.equal(get('fan1').textContent, '0'); assert.equal(get('fan3').textContent, '--');
   assert.equal(get('window1').textContent, '停止'); assert.equal(get('window2').textContent, '动作中');

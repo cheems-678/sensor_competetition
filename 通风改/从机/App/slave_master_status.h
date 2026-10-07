@@ -9,6 +9,9 @@ typedef struct {
     int16_t temperature_x10;
     uint16_t humidity_x10;
     uint8_t online, bme_valid, rain, dark, light_on, fan_pwm[4];
+    uint8_t acoustic_valid;
+    uint16_t acoustic_peak_to_peak[5];
+    uint32_t acoustic_age_ms, acoustic_seq;
 } SlaveMasterStatus;
 typedef struct {
     uint32_t accepted_count, invalid_count, duplicate_count, received_tick;

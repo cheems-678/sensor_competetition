@@ -45,6 +45,7 @@ venv/
 **/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.0
 **/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.build_log.htm
 **/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1.htm
+**/MDK-ARM/LoraSlaveV1.0/LoraSlaveV1_*.htm
 **/MDK-ARM/LoraSlaveV1.0/four_servo_disassembly.txt
 
 # Local agent work records
