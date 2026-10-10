@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "slave_esp_web.h"
+#include "slave_web_page.h"
 #include "slave_bme280.h"
 #include "slave_mq2.h"
 #include "slave_hcsr04.h"
@@ -20,7 +21,9 @@ volatile SlaveHcsr04Diagnostics SlaveHcsr04Diag;
 static SlaveHcsr04Sample ultrasonic;
 static uint8_t ultrasonic_valid;
 static uint32_t now;
-static char rx[32768], responses[5][24576], last_tx[513];
+/* Host capture includes the complete gzip page and HTTP headers, while the
+ * target still sends <=512-byte UART chunks with its existing buffers. */
+static char rx[32768], responses[5][sizeof(SlaveWebPage) + 512U], last_tx[513];
 static unsigned head, tail, response_length[5], raw_remaining, raw_id;
 static unsigned tx_count, resets, closes, pads, max_tx, modern, ancient;
 static unsigned ap_cur_count, ap_fallback_count;

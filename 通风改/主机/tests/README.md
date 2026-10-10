@@ -1,5 +1,28 @@
 # 主机电脑侧回归测试
 
+## 当前五路有限批次测试（2026-10-10）
+
+- 真实BSP检查GPIOA的PA0/4/5/6、GPIOB的PB0及ADC秩0/4/6/8/5；普通DMA共2560样本、每路512样本、60ms启动间隔、53ms保守源时间，采集中断始终禁用。验证交错通道隔离、每路常量/独立变化/极值和各秩失败，保留DMA超时、错误及时间回绕检查。
+- 真实服务分别发布五路实测峰峰值及饱和诊断，保留300ms失效、100ms预热和限频恢复。`test_pa0_link.c`沿用历史文件名，但现验证五路真实服务+runtime，生成`MAX4466_TELEMETRY`五路不同值的实际59字节帧；原业务和三板模拟回归不缩减。
+- 现有声学模型版EXE不改包；提取冻结纯协议解析器验证五路实测、有效0及全FFFF，不访问真实串口/数据库。产物仍只放build及MDK输出，Keil构建后检查栈与资源，不自动烧录。
+- 已通过真实五路BSP/服务、真实服务+runtime三轮5分钟、全部主机回归、控制室9组/三板17组11454检查及Python226项。冻结EXE确认实际runtime帧五路100/200/300/400/500和源年龄27ms；Keil0错误0警告，Flash23384/RAM10784，栈已知512/分配1024/中断预留256通过。日志 `build/keil_max4466_batch_20261010.log`；角色HEX及校验和见App/README.md。
+
+## 历史PA0隔离测试（2026-10-10，下面PA0占位说明不再适用于当前测试）
+
+- `test_max4466_adc.c`编译真实驱动，验证只配置PA0/IN0、普通DMA/2048个样本、禁用DMA IRQ及HT/TC/TE中断、50ms启动间隔、完整批次才读取、原始min/max/mean、恒定0/2048/4095输入峰峰值0、满量程交流峰峰值4095、超时/错误/初始化失败及有限恢复。测试桩不接入Keil。
+- `test_master_acoustic.c`编译真实服务，检查PA0实测、其余四路兼容占位0、300ms源年龄、源完成tick不被主循环迟处理刷新、饱和诊断和时间回绕。沿用原通信/BME/雨滴/光敏/四风机/远端控制回归，不缩减旧协议测试。
+- 新增 `test_pa0_link.c` 同时编译真实PA0服务与runtime，以假ADC故障/超时/恢复和虚拟时间检查遥测、网页与窗口事务继续运行。电脑模拟只验证软件路径，不宣称无线或真实ADC已验收。
+- 产物只放已有build与MDK输出；Keil构建后检查栈预算及Flash/RAM。现有声学模型EXE不改包，需验证其真实Python协议解析单路兼容46字节帧（第2..5路0）。
+
+在本目录、沿下方临时MinGW PATH执行新集成检查；它复用现有BME/runtime测试夹具，但使用真实 `master_acoustic.c` 而非五路声音替身：
+
+```powershell
+gcc -std=c99 -Wall -Wextra -Werror -Istubs -I../Core/Inc -I../App -I../Bsp test_pa0_link.c ../App/master_acoustic.c ../App/master_bme280.c ../App/master_runtime.c ../App/master_ingress.c ../App/lora_protocol.c -o build/test_pa0_link.exe
+./build/test_pa0_link.exe
+```
+
+输出 `PA0_TELEMETRY` 为真实runtime生成并经真实协议编码的完整59字节帧，可用现有冻结EXE提取的纯协议解析器只读验证。不能执行整个EXE或访问实际串口/正式数据库来代替隔离测试。
+
 - MAX4466测试新增test_master_acoustic.c（真实短窗服务，假ADC块/时间）和test_max4466_adc.c（真实BSP、专用平台替身）；检查引脚/秩序/ADC时钟/DMA、最新值下降与有效0、全五路同窗、缺口/驱动故障/恢复/年龄与tick回绕。新测试仍仅放tests、stubs，产物仅build；不加入Keil。原协议/runtime/UART测试扩展46字节73/77、300ms年龄、从机离线仍有本地声音及旧42输入隔离，不缩减其他传感器和控制回归。
 
 在本目录并沿用下方临时MinGW PATH，新增测试命令：

@@ -1,10 +1,7 @@
 #ifndef MAX4466_ADC_PLATFORM_H
 #define MAX4466_ADC_PLATFORM_H
 #include <stdint.h>
-#include <stddef.h>
-void *Max4466TestCopy(void *dst, const void *src, size_t n);
-#define memcpy Max4466TestCopy
-typedef struct { uint32_t CNDTR; } FakeChannel;
+typedef struct { uint32_t CCR, CNDTR; } FakeChannel;
 typedef struct { uint32_t ISR; } FakeDma;
 extern FakeChannel fake_channel;
 extern FakeDma fake_dma;
@@ -35,8 +32,9 @@ typedef struct { void *Instance; FakeAdcInit Init; DMA_HandleTypeDef *DMA_Handle
 #define DMA_MINC_ENABLE 1U
 #define DMA_PDATAALIGN_HALFWORD 2U
 #define DMA_MDATAALIGN_HALFWORD 2U
-#define DMA_CIRCULAR 1U
-#define DMA_PRIORITY_HIGH 2U
+#define DMA_NORMAL 0U
+#define DMA_PRIORITY_LOW 0U
+#define ADC_SCAN_DISABLE 0U
 #define ADC_SCAN_ENABLE 1U
 #define ADC_SOFTWARE_START 0U
 #define ADC_DATAALIGN_RIGHT 0U
@@ -50,6 +48,10 @@ typedef struct { void *Instance; FakeAdcInit Init; DMA_HandleTypeDef *DMA_Handle
 #define DMA_FLAG_TC1 2U
 #define DMA_FLAG_HT1 4U
 #define DMA_FLAG_TE1 8U
+#define DMA_IT_HT 4U
+#define DMA_IT_TC 2U
+#define DMA_IT_TE 8U
+#define DMA_CCR_EN 1U
 #define DMA1_Channel1_IRQn 11
 #define __HAL_RCC_GPIOA_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_GPIOB_CLK_ENABLE() ((void)0)
@@ -57,9 +59,9 @@ typedef struct { void *Instance; FakeAdcInit Init; DMA_HandleTypeDef *DMA_Handle
 #define __HAL_RCC_DMA1_CLK_ENABLE() ((void)0)
 #define __HAL_LINKDMA(a,f,d) do { (a)->f = &(d); (d).Parent = (a); } while (0)
 #define __HAL_DMA_CLEAR_FLAG(d,f) do { (void)(d); DMA1->ISR &= ~(f); } while (0)
-#define __get_PRIMASK() 0U
-#define __disable_irq() ((void)0)
-#define __set_PRIMASK(x) ((void)(x))
+#define __HAL_DMA_DISABLE_IT(d,f) ((d)->Instance->CCR &= ~(f))
+#define __HAL_DMA_DISABLE(d) ((d)->Instance->CCR &= ~DMA_CCR_EN)
+#define __HAL_ADC_DISABLE(a) ((void)(a))
 #define __DMB() ((void)0)
 uint32_t HAL_GetTick(void);
 int HAL_RCCEx_PeriphCLKConfig(RCC_PeriphCLKInitTypeDef *p);
@@ -70,12 +72,7 @@ int HAL_ADC_ConfigChannel(ADC_HandleTypeDef *p, ADC_ChannelConfTypeDef *c);
 int HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *p);
 int HAL_ADC_Start_DMA(ADC_HandleTypeDef *p, uint32_t *buf, uint32_t count);
 int HAL_ADC_Stop_DMA(ADC_HandleTypeDef *p);
-void HAL_DMA_IRQHandler(DMA_HandleTypeDef *p);
 void HAL_NVIC_DisableIRQ(int irq);
 void HAL_NVIC_EnableIRQ(int irq);
 void HAL_NVIC_ClearPendingIRQ(int irq);
-void HAL_NVIC_SetPriority(int irq, unsigned preempt, unsigned sub);
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *p);
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *p);
-void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *p);
 #endif

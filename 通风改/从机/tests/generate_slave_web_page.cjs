@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const raw = fs.readFileSync(path.join(__dirname, '../App/slave_web_page.html'));
+const {buildPage, readSource} = require('./web_page_source.cjs');
+const raw = Buffer.from(buildPage(readSource()));
 const source = require('node:zlib').gzipSync(raw, {level:9,mtime:0});
 const chunks = [];
 for (let start = 0; start < source.length; start += 96) {

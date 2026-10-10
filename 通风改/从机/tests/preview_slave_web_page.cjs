@@ -1,7 +1,7 @@
 /* Local QA only. No real UART, probes, or sensor access. */
 const http = require('node:http');
 const {readPage} = require('./check_slave_web_page.cjs');
-const page = require('node:zlib').gzipSync(Buffer.from(readPage()),{level:9});
+const page = () => require('node:zlib').gzipSync(Buffer.from(readPage()),{level:9});
 const fanDuties=[0,25,50,100],requests=new Map();
 let active=null;
 function settleControls(){if(active&&Date.now()-active.started>=500){active.state='success';if(active.type==='fan')fanDuties[active.channel-1]=active.value;active=null;}}
@@ -33,6 +33,6 @@ http.createServer((req, res) => {
       windows: [{state: 5,pulse_us: 1500,error: 0}, {state: 6,pulse_us: 1700,error: 0},
         {state: 5,pulse_us: 1500,error: 0}, {state: 4,pulse_us: 0,error: 2}]}));
   } else if (req.url === '/') {
-    res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8','Content-Encoding':'gzip'}); res.end(page);
+    res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8','Content-Encoding':'gzip','Cache-Control':'no-store'}); res.end(page());
   } else {res.writeHead(404); res.end();}
 }).listen(8766, '127.0.0.1', () => console.log('QA preview: http://127.0.0.1:8766 (simulated data)'));

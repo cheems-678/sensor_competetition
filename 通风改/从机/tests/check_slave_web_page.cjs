@@ -14,10 +14,12 @@ function readPage() {
 
 async function check() {
   const page = readPage();
-  assert.equal(page, fs.readFileSync(path.join(__dirname, '../App/slave_web_page.html'), 'utf8'));
+  const {buildPage, readSource} = require('./web_page_source.cjs');
+  assert.equal(page, buildPage(readSource()), 'embedded page equals deterministic source build');
+  assert.equal(buildPage(readSource()), buildPage(readSource().replace(/\r?\n/g, '\r\n')), 'CRLF cannot change generated content');
   assert(page.includes('从机环境监测') && !page.includes('\ufffd'));
   assert(!/<(?:script|link)[^>]+(?:src|href)=/i.test(page));
-  assert(page.includes('@media(max-width:600px)'));
+  assert(/@media\s*\(max-width:\s*600px\)/.test(page));
   const script = page.match(/<script>([\s\S]*?)<\/script>/)[1];
   const nodes = {};
   const canvas = new Proxy({createRadialGradient:()=>({addColorStop(){}})}, {get: (target, key) => target[key] || (() => {})});
@@ -120,7 +122,7 @@ async function check() {
     assert.equal(get('masterStatus').textContent, masterBadge);
     assert.equal(get('slaveStatus').textContent, slaveBadge);
     assert.equal(get('status').textContent, headerBadge, 'one HTTP failure cannot flash the header');
-    assert.equal(vm.runInContext('trend.filter(p=>p.side==="slave").map(p=>p.value).filter(v=>v===null).length', context) > 0, true, 'chart retains a real gap');
+    assert.equal(vm.runInContext('trend.some(p=>p.value===null)', context), false, 'expired polls do not consume history slots or invent samples');
     assert(vm.runInContext('trend.filter(p=>p.side==="slave").map(p=>p.value).length', context) <= chartLength + 1);
     step(450); fresh(); await poll(); step(1000);
     assert.match(get('masterStatus').textContent, /LoRa 同步/);
@@ -242,7 +244,8 @@ async function check() {
   fresh();await poll();controlMode='failed';vm.runInContext("submitCommand('window',3,1)",context);await poll();
   assert.match(get('windowResult3').textContent,/等待无线发送/);step(1000);fresh();await poll();
   assert.match(get('windowResult3').textContent,/设备拒绝/);assert(get('logs').textContent.includes('device_rejected'));
-  vm.runInContext("for(let i=0;i<1300;i++)record('master',10000+i,{temperature:i,humidity:50,pressure:100000})",context);
+  context.advanceSample=()=>{clock++};
+  vm.runInContext("for(let i=0;i<1300;i++){advanceSample();record('master',10000+i,{temperature:i,humidity:50,pressure:100000})}",context);
   assert.equal(vm.runInContext('trend.length',context),1200);step(600001);vm.runInContext('pruneTrend()',context);assert.equal(vm.runInContext('trend.filter(p=>p.value).length',context),0);
   vm.runInContext("switchPage('overview')",context);const zoom=vm.runInContext('modelView.zoom',context);get('zoomIn').handlers.click();assert(vm.runInContext('modelView.zoom',context)>zoom);get('resetModel').handlers.click();assert.equal(vm.runInContext('modelView.zoom',context),1);
   assert.equal(require('node:zlib').gunzipSync(fs.readFileSync(path.join(__dirname,'build/http_page.gz'))).toString('utf8'),page,'real HTTP gzip body equals the canonical HTML');

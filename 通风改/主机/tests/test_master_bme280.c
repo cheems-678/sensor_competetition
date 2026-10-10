@@ -14,11 +14,13 @@
 #include "master_acoustic.h"
 static uint8_t audio_valid;
 static MasterAcousticSample audio_sample;
+#ifndef MASTER_TEST_REAL_ACOUSTIC
 uint8_t MasterAcoustic_GetSample(uint32_t now, MasterAcousticSample *sample)
 {
     if (!audio_valid || (uint32_t)(now - audio_sample.tick) >= 300U) { return 0U; }
     *sample = audio_sample; return 1U;
 }
+#endif
 
 static uint32_t tick;
 static BME280_Status init_status, trigger_status, read_status;
@@ -130,6 +132,9 @@ static void reset(uint32_t start)
     status_queue_busy = 0U; memset((void *)&MasterLightDiag, 0, sizeof(MasterLightDiag));
     memset(&sent, 0, sizeof(sent));
     MasterRuntime_Init();
+#ifdef MASTER_TEST_REAL_ACOUSTIC
+    MasterAcoustic_Init(tick);
+#endif
 }
 
 static void request(uint8_t type, uint16_t flow, uint8_t value, uint8_t duty)
@@ -154,7 +159,13 @@ static void process(uint32_t now)
     tick = now;
     if ((event_ready != 0U) && (preserve_received_tick == 0U))
     { event.received_tick = now; }
+#ifdef MASTER_TEST_REAL_ACOUSTIC
+    MasterAcoustic_Process(tick);
+#endif
     MasterRuntime_ProcessOne(tick);
+#ifdef MASTER_TEST_REAL_ACOUSTIC
+    MasterAcoustic_Process(tick);
+#endif
 }
 
 static void slave_reply(uint16_t flow, uint8_t valid)
