@@ -38,12 +38,12 @@ export function UltrasonicMonitor({ reading, connected, active = true, nearDista
     <div className={`ultrasonic-scene ${valid ? 'measurement-valid' : 'measurement-unavailable'} ${near ? 'distance-near' : ''}`}>
       <svg className="ultrasonic-granary" viewBox="0 0 600 380" role="img" aria-label="粮仓剖面：仓顶传感器到水平粮面的竖直虚线表示距离">
         <defs>
-          <linearGradient id={`${id}-wall`} x2="1" y2="0"><stop stopColor="#142c41" /><stop offset=".5" stopColor="#102235" /><stop offset="1" stopColor="#1b344b" /></linearGradient>
-          <linearGradient id={`${id}-grain`} x2="0" y2="1"><stop stopColor="#b39759" stopOpacity=".6" /><stop offset="1" stopColor="#514635" stopOpacity=".8" /></linearGradient>
+          <linearGradient id={`${id}-wall`} x2="1" y2="0"><stop stopColor="#d9e6f1" /><stop offset=".5" stopColor="#f1f7fc" /><stop offset="1" stopColor="#d2e2ef" /></linearGradient>
+          <linearGradient id={`${id}-grain`} x2="0" y2="1"><stop stopColor="#d8bd7d" stopOpacity=".6" /><stop offset="1" stopColor="#ae945e" stopOpacity=".8" /></linearGradient>
           <pattern id={`${id}-kernels`} width="24" height="20" patternUnits="userSpaceOnUse"><ellipse cx="5" cy="6" rx="3" ry="1.4" fill="#dbc18a" opacity=".45" transform="rotate(-25 5 6)" /><ellipse cx="17" cy="15" rx="3" ry="1.4" fill="#b39b6e" opacity=".5" transform="rotate(30 17 15)" /></pattern>
           <marker id={`${id}-arrow`} markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse"><path d="M8 4L0 0L0 8Z" fill="currentColor" /></marker>
         </defs>
-        <ellipse cx="210" cy="349" rx="153" ry="12" fill="#050d18" opacity=".5" />
+        <ellipse cx="210" cy="349" rx="153" ry="12" fill="#7698b4" opacity=".18" />
         <path d="M90 111L210 42L330 111V329Q210 354 90 329Z" fill={`url(#${id}-wall)`} stroke="#7696b3" strokeWidth="2" />
         <path d="M90 111L210 42L330 111M90 111H330" fill="none" stroke="#8cb0cd" strokeWidth="2" />
         <g className="grain-surface" opacity={valid ? 1 : .25} data-surface-y={surface.toFixed(2)}>

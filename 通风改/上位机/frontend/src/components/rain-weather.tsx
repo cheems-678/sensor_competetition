@@ -15,7 +15,7 @@ function WeatherGraphic({ state, compact = false }: { state: WeatherState; compa
   return <svg className={`weather-graphic weather-${state}`} viewBox="0 0 400 280" role="img" aria-label={state === 'dry' ? '太阳：无雨' : state === 'rain' ? '云朵与雨滴：有雨' : '灰色云朵：状态未知'}>
     <defs>
       <radialGradient id={`${id}-sun`}><stop stopColor="#ffe7a1" /><stop offset="1" stopColor="#f9b541" /></radialGradient>
-      <linearGradient id={`${id}-cloud`} x2="0" y2="1"><stop stopColor={state === 'unknown' ? '#43576b' : '#6594b4'} /><stop offset="1" stopColor={state === 'unknown' ? '#253849' : '#243e5d'} /></linearGradient>
+      <linearGradient id={`${id}-cloud`} x2="0" y2="1"><stop stopColor={state === 'unknown' ? '#e0e8ef' : '#d5e8f3'} /><stop offset="1" stopColor={state === 'unknown' ? '#bdcdda' : '#94bbd2'} /></linearGradient>
     </defs>
     {!compact && <g className="weather-horizon" aria-hidden="true"><ellipse cx="200" cy="247" rx="155" ry="17" /><path d="M30 247H370M75 260H325" /></g>}
     {state === 'dry' ? <g>
@@ -25,15 +25,15 @@ function WeatherGraphic({ state, compact = false }: { state: WeatherState; compa
       <ellipse cx="180" cy="87" rx="12" ry="7" fill="#ffe2a0" opacity=".09" />
     </g> : <g>
       <g className={state === 'rain' ? 'weather-cloud weather-motion' : 'weather-cloud'}>
-        <path d="M117 151C93 151 91 113 116 106C117 76 153 60 177 80C205 41 267 59 270 98C312 95 328 151 287 151Z" fill={`url(#${id}-cloud)`} stroke={state === 'unknown' ? '#657f95' : '#87b9d7'} strokeWidth="2" />
+        <path d="M117 151C93 151 91 113 116 106C117 76 153 60 177 80C205 41 267 59 270 98C312 95 328 151 287 151Z" fill={`url(#${id}-cloud)`} stroke={state === 'unknown' ? '#9fb5c7' : '#90b5cc'} strokeWidth="2" />
         <path d="M127 108C131 89 152 84 169 93" fill="none" stroke="#c1deee" strokeOpacity=".3" strokeWidth="3" strokeLinecap="round" />
       </g>
-      {state === 'rain' ? <g aria-hidden="true">
+      {state === 'rain' && <g aria-hidden="true">
         {Array.from({ length: compact ? 8 : 16 }, (_, i) => <g key={i} className={compact ? 'rain-mark' : 'rain-drop weather-motion'} style={{ animationDelay: `${-i * .19}s`, animationDuration: `${1.35 + i % 5 * .18}s` }}>
           <path d={`M${compact ? 112 + i * 23 : 83 + i * 16} ${compact ? 177 : 153 + i % 3 * 10}l-7 17`} />
         </g>)}
         {!compact && Array.from({ length: 5 }, (_, i) => <ellipse className="rain-ripple weather-motion" key={i} cx={88 + i * 56} cy={242 + i % 2 * 6} rx="22" ry="5" style={{ animationDelay: `${-i * .45}s` }} />)}
-      </g> : <text x="200" y="132" textAnchor="middle" fill="#acbfd0" fontSize="37" fontFamily="Segoe UI, sans-serif">?</text>}
+      </g>}
     </g>}
   </svg>
 }

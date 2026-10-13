@@ -2,21 +2,20 @@
 """One-file Windows production build; use the local Python 3.13 environment."""
 from importlib.metadata import distribution
 from pathlib import Path
-import re
+import sys
 
 project = Path(SPECPATH)
+sys.path.insert(0, str(project))
+from backend.asset_manifest import frontend_asset_paths
 frontend = project / 'frontend' / 'build'
 index = frontend / 'index.html'
 if not index.is_file():
     raise RuntimeError('Build frontend before packaging the desktop application')
 
 # Bundle only assets referenced by the current index; retain historical build files.
-datas = [(str(index), 'frontend/build'), (str(project / 'THIRD_PARTY_NOTICES.md'), '.')]
-for reference in set(re.findall(r'(?:src|href)="\./([^"?#]+)', index.read_text(encoding='utf-8'))):
-    asset = (frontend / reference).resolve()
-    if frontend.resolve() not in asset.parents or not asset.is_file():
-        raise RuntimeError('Invalid frontend asset reference: ' + reference)
-    datas.append((str(asset), 'frontend/build/' + str(Path(reference).parent)))
+datas = [(str(project / 'THIRD_PARTY_NOTICES.md'), '.')]
+for asset in frontend_asset_paths(frontend):
+    datas.append((str(asset), 'frontend/build/' + str(asset.relative_to(frontend.resolve()).parent)))
 
 for package in ('pywebview', 'pythonnet', 'clr_loader', 'pyserial', 'bottle', 'proxy_tools',
                 'typing_extensions', 'cffi', 'pycparser'):
@@ -39,7 +38,7 @@ a = Analysis(
     [str(project / 'main.py')], pathex=[str(project)], binaries=[], datas=datas,
     hiddenimports=['webview.platforms.winforms', 'webview.platforms.edgechromium',
                    'serial.tools.list_ports_windows'], hookspath=[], hooksconfig={},
-    runtime_hooks=[], excludes=['tkinter', '_tkinter', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6',
+    runtime_hooks=[str(project / 'backend' / 'windows_platform_hook.py')], excludes=['sitecustomize', 'tkinter', '_tkinter', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6',
                               'gi', 'gtk', 'cefpython3', 'webview.platforms.qt',
                               'webview.platforms.gtk', 'webview.platforms.cef',
                               'webview.platforms.mshtml'], noarchive=False, optimize=0,

@@ -2,6 +2,8 @@
 
 新界面只包含运行所需的本地组件与资源，不加载远程字体、CDN 或管理后台模板。完整 npm 依赖版本记录于 `frontend/package-lock.json`，依赖包许可证随本地安装包分发；打包时应同时保留本文件。
 
+赛事标识为中国仪器仪表学会官方Logo，来源http://contest.cis.org.cn/img/logo.059aa56d.png；按用户要求用于参赛界面标识主办单位，原PNG离线内嵌且保持比例。当前水墨粮仓背景由用户提供，原图本地保存，不复制官网横幅。标识及背景不属于下列开源组件许可证范围。
+
 | 组件 | 用途 | 许可 | 来源 |
 | --- | --- | --- | --- |
 | React / React DOM | 前端界面 | MIT | https://github.com/facebook/react |

@@ -29,10 +29,9 @@ export function SmokeMonitor({ mq2, connected, active, warning }: { mq2: Snapsho
       <div ref={sceneRef} className="smoke-scene" data-running={running} data-density={density} aria-label="烟雾强弱动画">
         <svg viewBox="0 0 480 320" className="smoke-graphic" role="img" aria-label={index === null ? '烟雾数据未知' : `相对烟雾指数 ${index} 的视觉示意`}>
           <defs><radialGradient id={`${id}-puff`}><stop stopColor={color} stopOpacity=".8" /><stop offset=".6" stopColor={color} stopOpacity=".35" /><stop offset="1" stopColor={color} stopOpacity="0" /></radialGradient></defs>
-          <g className="smoke-room" fill="none" stroke="#40677f"><path d="M65 262V96L240 42L415 96V262ZM65 96L240 152L415 96M240 152V285M65 262L240 285L415 262" /><path d="M92 266V112M388 266V112M114 126L240 166L366 126" strokeOpacity=".25" /></g>
+          <g className="smoke-room" fill="none" stroke="#a3c2d4"><path d="M65 262V96L240 42L415 96V262ZM65 96L240 152L415 96M240 152V285M65 262L240 285L415 262" /><path d="M92 266V112M388 266V112M114 126L240 166L366 126" strokeOpacity=".25" /></g>
           <ellipse cx="240" cy="262" rx="142" ry="20" fill={color} opacity={index === null ? .04 : .04 + index * .001} />
           {Array.from({ length: density }, (_, i) => <g className="smoke-puff" key={i} style={{ animationDelay: `${-i * .43}s` }}><ellipse cx={125 + (i * 47) % 230} cy={225 - (i * 29) % 145} rx={32 + (index ?? 0) * .22 + i % 3 * 5} ry={26 + (index ?? 0) * .18} fill={`url(#${id}-puff)`} /></g>)}
-          {index === null && <text x="240" y="182" textAnchor="middle" fill="#8196ad" fontSize="42">?</text>}
           {index === 0 && <g fill="#7fc5d5" opacity=".55"><path d="M171 191h35m-8-5 8 5-8 5M258 170h40m-8-5 8 5-8 5" fill="none" stroke="currentColor" strokeWidth="2" /></g>}
           <text x="240" y="307" textAnchor="middle" fill="#6289a3" fontSize="11" letterSpacing="3">MQ-2 / PA7 · RELATIVE SMOKE</text>
         </svg>

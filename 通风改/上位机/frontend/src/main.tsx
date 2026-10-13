@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import './styles.css'
+import './light-theme.css'
 
 const query = new URLSearchParams(window.location.search)
 if (query.get('preview') === '1' && !query.has('desktop') && !window.pywebview) {

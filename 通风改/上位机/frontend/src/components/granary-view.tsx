@@ -118,7 +118,7 @@ export function GranaryView({ active: pageActive = true }: { active?: boolean })
       {unavailable && <p className="granary-fallback" role="status">当前环境无法显示三维模型，其他操作仍可使用。</p>}
       <div className="granary-caption">
         <div className="thermal-readings">
-          {[['上层', temperatures.upper], ['下层', temperatures.lower]].map(([label, temperature]) => <div key={label}><span>{label}</span><b style={{ color: `rgb(${temperatureColor(Number(temperature)).join(',')})` }}>{Number(temperature).toFixed(1)}<small> °C</small></b></div>)}
+          {[['上层', temperatures.upper], ['下层', temperatures.lower]].map(([label, temperature]) => <div key={label}><span>{label}</span><b style={{ borderLeftColor: `rgb(${temperatureColor(Number(temperature)).join(',')})` }}>{Number(temperature).toFixed(1)}<small> °C</small></b></div>)}
         </div>
         <div className="temperature-spectrum" aria-label="模拟温度色谱，16℃蓝色到36℃橙色">
           <div className="spectrum-heading"><span>低温</span><span>温度色谱 / °C</span><span>高温</span></div>

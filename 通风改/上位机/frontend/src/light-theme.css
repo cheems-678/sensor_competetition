@@ -1,0 +1,189 @@
+/* Display-only light theme; device states and animation rules stay in styles.css. */
+:root { color-scheme: light; color: #24425f; background: #eef4fa; --muted: #304c65; --text-muted: #304c65; --border: #b6cedf; --blue: #147ac0; --glass: rgba(255,255,255,.74); --glass-border: rgba(164,192,214,.55); --ink: #244563; --ink-soft: #304c65; }
+body { background: #eef4fa; scrollbar-color: #9eb9d2 #f1f6fb; isolation: isolate; }
+body::before { background: url('./lib/grain-watercolor.png') center center / cover no-repeat; opacity: 1; z-index: -1; }
+.workspace::before { background: none; clip-path: none; }
+.sidebar { background: linear-gradient(90deg, #f8fbfed9 65%, #f8fbfe94); border-color: transparent; backdrop-filter: blur(6px); box-shadow: 8px 0 24px #57748d06; }
+.sidebar-brand { border-color: #ccdeed; }
+.sidebar-brand strong, h1, h2, h3, .page-heading h2 { color: #233e61; text-shadow: none; }
+.brand-symbol { background: linear-gradient(135deg, #ebf7ff, #dcebf8); color: #1384b4; border-color: #b6d5e8; box-shadow: 0 3px 10px #2445630c; }
+.brand-eyebrow, .page-eyebrow { color: #2e6683; }
+h1 span { color: #405b74; border-color: #c5d7e8; }
+.organizer-brand { border: 1px solid #244768; border-radius: 8px; background: linear-gradient(125deg, #132d4a, #163956); padding: 8px 12px 10px; gap: 5px; box-shadow: 0 4px 12px #263f6014; }
+.organizer-label { color: #b9d1e7; font-size: .65rem; }
+.organizer-brand img { width: 210px; }
+.header-identity { gap: 16px 24px; }
+.app-header { border-color: #c5d7e8; }
+.app-header::after { background: #19a4d6; box-shadow: none; }
+.global-toolbar { background: linear-gradient(115deg, #ffffffe0, #f0f7fcc7); border: 1px solid #ffffffa6; border-radius: 18px; padding: 17px 16px 2px; margin: 16px 0 22px; backdrop-filter: blur(10px); box-shadow: 0 5px 22px #395c7510; }
+.global-toolbar .app-header { border-bottom-color: #91b2ca3d; }
+.global-toolbar .app-header::after { width: 80px; opacity: .45; }
+.global-toolbar .connection-bar { background: #ffffff66; border-color: #adc8dc66; box-shadow: none; }
+.nav-group-label, .sidebar-footer, .page-index { color: #415c76; border-color: #9dbbd236; }
+.nav-item { color: #395a7c; }
+.nav-item:hover { color: #087ea3; background: #eaf4fb; }
+.nav-item.selected { color: #087895; background: #e0f0f8; border-color: #c3dfed; }
+.nav-item.selected::before { background: #16a2ca; box-shadow: none; }
+.panel { background: var(--glass); border-color: var(--glass-border); box-shadow: 0 5px 20px #2948670d, inset 0 1px 0 #ffffff8c; border-radius: 14px; backdrop-filter: blur(3px); }
+.panel-heading, .heading-name, .connection-label, .control-name, .column-heading { color: var(--ink-soft); }
+.connection-label svg { color: #1688b8; }
+.connection-status, .link-state { color: #405d77; }
+.online, .link-state.online { color: #08795b; }
+.status-dot { background: #829ab1; }
+.online .status-dot { background: #0b9a76; box-shadow: none; }
+.port-field input, .duty-input, .acoustic-threshold input { background: #f8fbff; border-color: #bfd2e4; color: #294564; }
+.port-field input::placeholder { color: #647f98; }
+.duty-input input { color: #294564; }
+.button-primary { background: linear-gradient(120deg, #096d99, #126eb8); color: #fff; border-color: #116eaa; box-shadow: 0 3px 8px #1687c31a; }
+.button-primary:hover:not(:disabled) { background: #116dae; border-color: #116dae; }
+.button-outline, .analysis-heading button { background: #f4f9fd; color: #2e5379; border-color: #a4c5df; box-shadow: none; }
+.button-outline:hover:not(:disabled), .analysis-heading button:hover { background: #e8f3fc; border-color: #80b5d3; }
+.button-ghost, .port-toggle { color: #4b7b9c; }
+.button-ghost:hover:not(:disabled), .port-toggle:hover:not(:disabled) { color: #126d98; background: #e7f2fb; }
+.port-dropdown { background: #fff; border-color: #c2d6e7; box-shadow: 0 8px 28px #2948671c; }
+.port-option { background: #fff; color: #355475; }
+.port-option.active, .port-option:hover { background: #e8f5fc; color: #106b96; }
+.ports-empty, .device-label, .section-subtitle, .micro-label, .metric-label, .metric-unit, .sound-value span, .duty-input span { color: var(--ink-soft); }
+.metric-value, .sound-value, .summary-card strong { color: #284d75; text-shadow: none; }
+.empty-value { color: #8599ad; }
+.summary-card > span { color: var(--ink-soft); }
+.summary-card { border-top: 2px solid #69b5d475; }
+.overview-status { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.sensor-mark { background: #18a3c5; box-shadow: none; }
+.sensor-mark.slave { background: #7961b8; box-shadow: none; }
+.sensor-panel::before { background: linear-gradient(transparent, #1aa3c570, transparent); }
+.metric + .metric, .sound-metric + .sound-metric { border-color: #d6e2ee; }
+.toolbar-separator, .device-divider { background: #c9daea; }
+.pin { background: #eaf5fc; color: #1c749d; border-color: #c2dfea; }
+.link-row, .window-state, .servo-grid .servo-control { background: #f7fbff6b; border-color: #aac9df59; color: var(--ink-soft); }
+.fan-status, .window-state, .acoustic-help, .control-help, .window-help, .window-help strong { color: #4c6783; }
+.notice, .demo-badge { background: #fff5e5; color: #825914; border-color: #ecd2a6; }
+.demo-explanation { color: #805b26; }
+.granary-heading, .trend-heading, .logs-heading, .rain-monitor-heading { background: linear-gradient(105deg, #eaf5fc70, #ffffff47); border-color: #a9c8dd59; }
+.rain-monitor-heading svg { color: #448ca8; }
+.granary-heading .heading-name > svg, .trend-heading svg { color: #158eb4; }
+.granary-stage, .acoustic-model-stage { background: #eaf3f947; }
+.granary-caption, .granary-caption strong, .thermal-value { color: #315b7f; }
+.granary-eyebrow, .thermal-readings span, .thermal-state, .granary-caption p, .granary-help, .granary-help span { color: #547b99; border-color: #c7daea; }
+.granary-fallback, .acoustic-fallback { color: #4c6986; }
+.temperature-legend { background: #f6fbffdd; border-color: #cbddeb; color: #4e7193; }
+.temperature-legend strong, .temperature-stop { color: #345c80; }
+.thermal-readings b { color: #315b8b; border-left: 3px solid transparent; padding-left: 9px; }
+.temperature-spectrum { border-color: #c8ddea; }
+.spectrum-heading, .spectrum-stops small { color: #577594; }
+.spectrum-stops b { color: #365c80; }
+.help-details { color: var(--ink-soft); border-color: #adc8db4d; }
+.help-details > summary { color: #20789e; }
+.help-details > summary:hover, .help-content strong { color: #175674; }
+.trend-selector { background: #f3f8fd; border-color: #c7daea; }
+.trend-selector button { color: #5e7895; }
+.trend-selector button[aria-pressed="true"] { background: #dff0fa; color: #086e98; box-shadow: inset 0 0 0 1px #b4d9ec; }
+.trend-meta, .trend-reading, .trend-empty { color: #557592; }
+.trend-grid line { stroke: #d7e4ef; }
+.trend-grid text, .trend-time { fill: #5f7f9d; }
+.trend-legend .master { background: #138da9; }
+.trend-legend .slave { background: #7960b4; }
+.trend-series.master path { stroke: #138da9; }
+.trend-series.slave path { stroke: #7960b4; }
+.trend-series.master circle, .trend-cursor .master { fill: #138da9; }
+.trend-series.slave circle, .trend-cursor .slave { fill: #7960b4; }
+.trend-cursor circle { stroke: #fff; }
+.trend-reading .master strong { color: #08778e; }
+.trend-reading .slave strong { color: #7051a7; }
+.rain-monitor-body, .smoke-monitor-body { background: transparent; }
+.weather-scene, .smoke-scene { background: radial-gradient(ellipse at 50% 40%, #dbeef952, #f8fbfe0d 75%); }
+.weather-dry .weather-scene { background: radial-gradient(ellipse at 50% 35%, #f6dca12b, transparent 72%); }
+.weather-indicator { background: #f4f9fe; border-color: #c7dcec; }
+.weather-indicator strong, .weather-reading, .rain-details dd, .rain-state, .rain-source { color: #294e70; }
+.rain-details dl, .rain-details dl > div { border-color: #9bbbd24d; }
+.weather-horizon { fill: #9ac8db1f; stroke: #a3c5d75c; }
+.weather-dry .weather-horizon { fill: #d8c89914; stroke: #c7b78145; }
+.rain-ripple { stroke: #92bdd2; }
+.rain-details dt, .rain-details .rain-boundary, .smoke-note, .smoke-reading-label, .smoke-scale-labels, .smoke-reference span { color: #577593; }
+.smoke-scale { background: #e4edf5; }
+.smoke-reference { border-color: #d1e0eb; }
+.smoke-reference strong { color: #315a7d; }
+.smoke-level, .smoke-number strong { color: #356d8d; }
+.smoke-abnormal .smoke-number strong { color: #b42349; }
+.rain-drop path, .rain-mark path { stroke: #8dbfd3; }
+.smoke-room { stroke: #a3c2d4; }
+.ultrasonic-scene { color: #1389ad; }
+.ultrasonic-diagram-label { fill: #577997; }
+.ultrasonic-grain-label { fill: #9a7435; }
+.ultrasonic-annotation-label, .ultrasonic-diagram-caption, .ultrasonic-distance > span { color: #557593; }
+.ultrasonic-distance { color: #315b87; }
+.distance-near .ultrasonic-distance, .distance-near .ultrasonic-distance strong { color: #b42349; }
+.measurement-unavailable, .measurement-unavailable .ultrasonic-distance { color: #758a9e; }
+.warning-form input:not([type="checkbox"]), .warning-form select { background: #f7fbff; color: #294564; border-color: #bfd2e4; }
+.warning-note, .warning-progress, .warning-empty, .manual-channel h3 span, .warning-api summary { color: #536f8b; }
+.warning-error { color: #ae2948; }
+.warning-card, .manual-channel, .archive-report { border-color: #cbddeb; color: #3e5f80; }
+.warning-card.active { border-left-color: #d09827; }
+.warning-card.unavailable { border-left-color: #8464ac; }
+.warning-analysis { background: #f0f7fc73; }
+.warning-analysis strong { color: #206b95; }
+.manual-conclusion { color: #06765d; }
+.manual-result.abnormal .manual-conclusion { color: #926219; }
+.manual-result.insufficient .manual-conclusion, .manual-result.partial .manual-conclusion, .manual-result.unavailable .manual-conclusion { color: #715a91; }
+.manual-channel.exceeded { border-color: #d5b56a; }
+.sensor-check { background: #f5faff70; border-color: #adc8db66; }
+.sensor-check p, .sensor-check.unavailable .sensor-check-state { color: #59758f; }
+.sensor-check.normal .sensor-check-state { color: #097858; }
+.sensor-check.abnormal .sensor-check-state { color: #b42349; }
+.confirm-dialog { background: #fff; border-color: #b9cfe2; color: #2c4d6f; }
+.function-page .fan-card { background: #f8fbfe70; border-color: #adc8db70; }
+.fan-card + .fan-card { border-color: #c8dceb; }
+.fan-card .micro-label, .fan-level-status span { color: #627f99; }
+.fan-ring { background: radial-gradient(circle, #d6edf9, #f6fbff); border-color: #a6cce1; color: #238eac; }
+.fan-hub { background: #319bb4; box-shadow: none; }
+.fan-level-status { color: #317590; }
+.fan-presets button { background: #eff7fc; border-color: #c4dceb; color: #406c89; }
+.fan-presets button[aria-pressed=true], .fan-presets button:hover:not(:disabled) { background: #d8edf7; color: #14718d; border-color: #85bfd7; }
+.acoustic-point-light, .acoustic-point-pin { background: #ffffffeb; }
+.acoustic-point { color: #657c92; }
+.acoustic-point.normal, .acoustic-channel-state.normal { color: #0d8699; }
+.acoustic-point.normal .acoustic-point-light { background: #e3f5f8; box-shadow: 0 0 12px #149bad18; }
+.acoustic-point.abnormal, .acoustic-channel-state.abnormal, .acoustic-channel.abnormal .sound-value { color: #b42349; }
+.acoustic-point.abnormal .acoustic-point-light { background: #ffeef2; }
+.acoustic-legend { background: #f7fbfe47; border-color: #adc8db59; color: var(--ink-soft); }
+.acoustic-legend i.normal { background: #0d8699; }
+.acoustic-legend i.abnormal { background: #b42349; }
+.acoustic-ring-note, .acoustic-channel-state, .acoustic-threshold, .acoustic-applied, .acoustic-threshold-actions { color: #54718d; }
+.logs-body { background: #f5f9fe75; color: #294d6e; }
+.logs-empty, .log-follow { color: #5f7f9a; }
+.log-count { background: #e6f2fa; color: #29779a; }
+button:disabled, input:disabled, .warning-form input:disabled { opacity: 1; }
+.button:disabled, .fan-presets button:disabled, .analysis-heading button:disabled { background: #e7eef5; color: #65768a; border-color: #c6d3df; box-shadow: none; cursor: not-allowed; }
+.port-toggle:disabled { color: #687e92; background: #e7eef5; }
+input:disabled { background: #eaf0f6; color: #66788b; }
+input::placeholder { color: #60768c; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid #086ea6; outline-offset: 3px; }
+.delete-button { background: #aa2942; color: #fff; border-color: #a3263e; }
+.delete-button:hover:not(:disabled) { background: #8f2036; border-color: #8f2036; }
+.fan-card .fan-input-row input[type="range"]::-webkit-slider-runnable-track { background: linear-gradient(to right, #168baa 0%, #168baa var(--range-fill), #c5d7e7 var(--range-fill), #c5d7e7 100%); }
+.fan-card .fan-input-row input[type="range"]::-moz-range-track { background: #c5d7e7; }
+.fan-card .fan-input-row input[type="range"]::-moz-range-progress { background: #168baa; }
+@keyframes acoustic-alert { 0%, 100% { box-shadow: 0 0 7px #d53b5920; background: #ffeef2; } 50% { box-shadow: 0 0 20px #d53b5950; background: #ffcad6; } }
+@media (max-width: 700px) { .organizer-brand { width: fit-content; max-width: 100%; } }
+@container (max-width: 46rem) { .overview-status { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 24rem) { .overview-status { grid-template-columns: minmax(0, 1fr); } }
+.rain-details dt, .rain-details .rain-boundary, .smoke-reading-label, .smoke-scale-labels, .smoke-reference span,
+.granary-eyebrow, .thermal-readings span, .granary-caption p, .spectrum-heading, .spectrum-stops small,
+.trend-meta, .trend-reading, .trend-empty, .warning-note, .warning-progress, .warning-empty, .warning-api summary,
+.sensor-check p, .sensor-check.unavailable .sensor-check-state, .acoustic-channel-state, .acoustic-threshold,
+.acoustic-applied, .acoustic-threshold-actions, .acoustic-ring-note, .logs-empty, .log-follow { color: var(--ink-soft); }
+.trend-grid text, .trend-time { fill: var(--ink-soft); }
+.acoustic-channel-state.normal { color: #087b85; }
+.acoustic-channel-state.abnormal { color: #b42349; }
+.empty-value { color: #516b81; }
+.sidebar-brand div > span, .fan-card .micro-label, .fan-level-status span { color: var(--ink-soft); }
+.granary-heading, .trend-heading, .logs-heading, .rain-monitor-heading { color: var(--ink); }
+.weather-indicator { background: #f7fbffc7; border-color: #9abbd24f; }
+.weather-indicator > div > span { color: var(--ink-soft); }
+.help-details > summary { color: #255d7b; }
+.trend-selector button { color: var(--ink-soft); }
+.online, .link-state.online, .sensor-check.normal .sensor-check-state, .acoustic-channel-state.normal, .manual-conclusion { color: #075647; }
+.warning-error, .sensor-check.abnormal .sensor-check-state, .smoke-abnormal .smoke-number strong,
+.distance-near .ultrasonic-distance, .distance-near .ultrasonic-distance strong,
+.acoustic-channel-state.abnormal, .acoustic-channel.abnormal .sound-value { color: #90203d; }
+@media (max-width: 700px) { .global-toolbar { padding: 13px 12px 1px; margin-top: 12px; border-radius: 14px; } }

@@ -90,23 +90,23 @@ export function drawAcousticGranary(context: CanvasRenderingContext2D, width: nu
   }
   context.clearRect(0, 0, width, height)
   const glow = context.createRadialGradient(width * .5, height * .46, 0, width * .5, height * .46, height * .7)
-  glow.addColorStop(0, '#102b40'); glow.addColorStop(1, '#060e1b')
+  glow.addColorStop(0, '#e0edf766'); glow.addColorStop(1, '#f2f7fb0a')
   context.fillStyle = glow; context.fillRect(0, 0, width, height)
   for (let i = -4; i <= 4; i++) {
-    path([[i * .4, -1.27, -1.8], [i * .4, -1.27, 1.8]], '#31516945', .6)
-    path([[-1.8, -1.27, i * .4], [1.8, -1.27, i * .4]], '#31516945', .6)
+    path([[i * .4, -1.27, -1.8], [i * .4, -1.27, 1.8]], '#7c9dbf65', .6)
+    path([[-1.8, -1.27, i * .4], [1.8, -1.27, i * .4]], '#7c9dbf65', .6)
   }
   for (let i = 0; i < 32; i++) {
     const a = i / 32 * Math.PI * 2, b = (i + 1) / 32 * Math.PI * 2
-    path([circle(a, -1.1), circle(b, -1.1), circle(b, 1.02), circle(a, 1.02)], '#5996b018', .5, '#449fc80a')
-    path([circle(a, 1.02, .96), circle(b, 1.02, .96), [0, 1.59, 0]], '#609fba20', .5, '#6fb5d00a')
-    if (i % 4 === 0) path([circle(a, -1.1), circle(a, 1.02), [0, 1.59, 0]], '#79bdd252')
+    path([circle(a, -1.1), circle(b, -1.1), circle(b, 1.02), circle(a, 1.02)], '#5283a82a', .5, '#80b5d412')
+    path([circle(a, 1.02, .96), circle(b, 1.02, .96), [0, 1.59, 0]], '#5283a832', .5, '#80b5d412')
+    if (i % 4 === 0) path([circle(a, -1.1), circle(a, 1.02), [0, 1.59, 0]], '#477b9d92')
   }
   for (const y of [-1.1, -.57, -.04, .49, 1.02]) {
-    path(Array.from({ length: 65 }, (_, i) => circle(i / 64 * Math.PI * 2, y)), '#6baecb65', y === 1.02 || y === -1.1 ? 1.4 : .6)
+    path(Array.from({ length: 65 }, (_, i) => circle(i / 64 * Math.PI * 2, y)), '#477b9d92', y === 1.02 || y === -1.1 ? 1.4 : .6)
   }
   context.setLineDash([4, 5])
-  path(Array.from({ length: 65 }, (_, i) => circle(i / 64 * Math.PI * 2, .45, .86)), '#3bced988', 1.2)
+  path(Array.from({ length: 65 }, (_, i) => circle(i / 64 * Math.PI * 2, .45, .86)), '#128ca8a8', 1.2)
   context.setLineDash([])
 }
 
@@ -117,10 +117,10 @@ export function drawGranary(context: CanvasRenderingContext2D, width: number, he
   }
   context.clearRect(0, 0, width, height)
   const glow = context.createRadialGradient(width * .5, height * .48, 0, width * .5, height * .48, height * .85)
-  glow.addColorStop(0, '#122d43'); glow.addColorStop(1, '#060e1b')
+  glow.addColorStop(0, '#dce8f273'); glow.addColorStop(1, '#f2f7fb0a')
   context.fillStyle = glow; context.fillRect(0, 0, width, height)
 
-  context.strokeStyle = '#89b0cc18'; context.lineWidth = .7
+  context.strokeStyle = '#88a7c368'; context.lineWidth = .7
   for (let i = -6; i <= 6; i++) {
     for (const points of [ [[i * .4, -1.29, -2.4], [i * .4, -1.29, 2.4]], [[-2.4, -1.29, i * .4], [2.4, -1.29, i * .4]] ] as Point[][]) {
       const a = project(transform(points[0], view)), b = project(transform(points[1], view))
@@ -129,7 +129,7 @@ export function drawGranary(context: CanvasRenderingContext2D, width: number, he
   }
   const shadow = project(transform([0, -1.29, 0], view))
   const shade = context.createRadialGradient(shadow[0], shadow[1], 0, shadow[0], shadow[1], scale * 1.25)
-  shade.addColorStop(0, '#03081199'); shade.addColorStop(1, '#03081100')
+  shade.addColorStop(0, '#355e8430'); shade.addColorStop(1, '#355e8400')
   context.fillStyle = shade
   context.beginPath(); context.ellipse(shadow[0], shadow[1], scale * 1.4, scale * .27, 0, 0, Math.PI * 2); context.fill()
 

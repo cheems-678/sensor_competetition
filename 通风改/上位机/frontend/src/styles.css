@@ -15,6 +15,22 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
+/* Static competition palette; decoration never sits over the controls. */
+body::before { content: ''; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 90% 0, #1265a529, transparent 44%), radial-gradient(ellipse at 100% 46%, #6242b51c, transparent 46%); }
+.header-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 20px 28px; min-width: 0; }
+.organizer-brand { display: flex; flex-direction: column; gap: 7px; padding-left: 22px; border-left: 1px solid #355575; flex: 0 0 auto; max-width: 100%; }
+.organizer-label { color: #82a8c9; font-size: .7143rem; letter-spacing: .14em; }
+.organizer-brand img { display: block; width: 220px; max-width: 100%; height: auto; object-fit: contain; }
+.global-toolbar .app-header { flex-wrap: wrap; position: relative; z-index: 1; }
+.workspace { position: relative; }
+.workspace::before { content: ''; position: fixed; top: 0; right: 0; width: 40vw; height: 32rem; pointer-events: none; background: repeating-linear-gradient(145deg, transparent 0 72px, #577ec30a 73px 74px, transparent 75px 146px), linear-gradient(120deg, transparent 35%, #285a8912 36% 54%, transparent 55%); clip-path: polygon(14% 0, 100% 0, 100% 100%, 0 61%); }
+.global-toolbar { background-image: linear-gradient(110deg, #07111ff2 15%, #0b2344e8 74%, #1a1a40ed); }
+@media (max-width: 700px) {
+  .header-identity { width: 100%; gap: 15px; }
+  .organizer-brand { padding-left: 0; border-left: 0; width: 100%; }
+  .organizer-brand img { width: 220px; }
+  .workspace::before { width: 72vw; opacity: .7; }
+}
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .45; }

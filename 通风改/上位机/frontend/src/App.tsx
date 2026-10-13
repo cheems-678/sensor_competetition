@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, Box, CircleHelp, CloudRain, DoorClosed, DoorOpen, Link2, Radio, RefreshCw, Terminal, Thermometer, Waves, Wind, X } from 'lucide-react'
 import { Button } from './components/button'
+import { OrganizerBrand } from './components/organizer-brand'
 import { FanControl } from './components/fan-control'
 import { PortCombobox } from './components/port-combobox'
 import { GranaryView } from './components/granary-view'
@@ -89,7 +90,7 @@ export function App({ api: suppliedAPI }: { api?: DesktopAPI }) {
     <div className="workspace">
     <div className="global-toolbar">
     <header className="app-header">
-      <div className="brand"><span className="brand-symbol"><Wind size={26} strokeWidth={1.6} /></span><div><div className="brand-eyebrow">VENTILATION / CONTROL</div><h1>通风监控<span>设备控制台</span></h1></div></div>
+      <div className="header-identity"><div className="brand"><span className="brand-symbol"><Wind size={26} strokeWidth={1.6} /></span><div><div className="brand-eyebrow">VENTILATION / CONTROL</div><h1>通风监控<span>设备控制台</span></h1></div></div><OrganizerBrand /></div>
       <div className="header-meta">
         {snapshot.demo && <span className="demo-badge">演示模式 · 仅模拟串口</span>}
         <span className={`connection-status ${snapshot.connected ? 'online' : ''}`}><span className="status-dot" />{snapshot.connected ? '串口已连接' : '串口未连接'}</span>
