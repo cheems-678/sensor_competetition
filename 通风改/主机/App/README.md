@@ -1,5 +1,12 @@
 # 主机 v4 架构
 
+## 当前源码清理（2026-10-14）
+
+- 主机继续采用裸机主循环和非阻塞状态机，HAL 时基使用 SysTick。删除已排除编译的 `Core/Src/freertos.c`、`Core/Src/stm32f1xx_hal_timebase_tim.c`、`Core/Inc/FreeRTOSConfig.h` 及 `Middlewares/Third_Party/FreeRTOS/`；Keil 工程移除对应条目、FreeRTOS 分组和包含路径。
+- 主机组号保持 `MasterIdentity_Init(1U)` 的固定配置。删除未调用的 `Core/Src/dip_swich.c` 和 `Core/Inc/dip_swich.h`，移除对应工程条目；不恢复其 PA6/PA7 拨码初始化，以免影响五路声学和光照输入。
+- 保留全部当前采集、通信、风机、灯带、雨滴、窗口转发及测试代码，保留默认输出和历史角色固件。下方历史记录用于追溯，不表示被清理的源码仍存在。构建日志沿 `tests/build/keil_cleanup_ab_20261014.log`，本次不烧录。
+- 清理后三板正常 Keil 工程全量构建均为0错误、0警告。主机 Code22888/RO356/RW140/ZI10644，Flash23384、RAM10784字节，与清理前五路批次版本的记录一致；此为编译验证，不是实板验收。
+
 ## 当前五路有限批次采集（2026-10-10，优先于下方历史记录）
 
 - 用户确认更换故障MAX4466后PA0正常，现扩展为五路实测：1=PA0/IN0、2=PA4/IN4、3=PA6/IN6、4=PB0/IN8、5=PA5/IN5。各模块3.3V供电、共地，OUT独立接对应引脚，不接5V信号；未接输入可能浮空，不自动识别模块是否存在。

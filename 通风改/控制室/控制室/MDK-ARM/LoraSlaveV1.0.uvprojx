@@ -586,11 +586,6 @@
                 </FileArmAds>
               </FileOption>
             </File>
-            <File>
-              <FileName>dip_swich.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\dip_swich.c</FilePath>
-            </File>
           </Files>
         </Group>
         <Group>

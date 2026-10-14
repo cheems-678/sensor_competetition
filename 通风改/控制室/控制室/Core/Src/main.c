@@ -27,7 +27,6 @@
 #include "stdio.h"
 #include "string.h"
 #include "lora.h"
-#include "dip_swich.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
